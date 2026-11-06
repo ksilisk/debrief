@@ -1,0 +1,88 @@
+/*
+ * Design tokens, taken from the Debrief UI design.
+ * Style every component through these variables, never with raw colors.
+ */
+:root {
+  --paper: #f1f1ee;
+  --surface: #ffffff;
+  --ink: #1a1b1e;
+  --muted: #64676d;
+  --line: #dadbd6;
+  --soft: #f3f3f1;
+  --chrome: #e8e8e5;
+  --side: #f5f5f3;
+
+  /* Recording red, and the two tracks: Me (microphone) and Them (system audio). */
+  --rec: #d7353b;
+  --me: #2e63cc;
+  --them: #0f8569;
+
+  /* Status colors, separate from the accent. */
+  --ok: #2c7a4b;
+  --warn: #a86f12;
+  --on-accent: #ffffff;
+
+  --shadow: 0 1px 2px rgba(20, 20, 25, 0.06), 0 18px 48px rgba(20, 20, 25, 0.12);
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #111214;
+    --surface: #1a1b1e;
+    --ink: #ecedef;
+    --muted: #9c9fa6;
+    --line: #2e3034;
+    --soft: #222327;
+    --chrome: #232428;
+    --side: #1e1f22;
+
+    --rec: #ff5b60;
+    --me: #7299f1;
+    --them: #3cc3a1;
+
+    --ok: #5cc58b;
+    --warn: #e2aa4c;
+    --on-accent: #111214;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.5);
+
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/1.45 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--me);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "debrief-app"
+description = "Debrief desktop app: the Tauri shell around the Svelte window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "debrief_app"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+debrief-core.workspace = true

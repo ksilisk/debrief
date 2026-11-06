@@ -1,0 +1,16 @@
+# Rust
+/target
+
+# Frontend
+node_modules/
+/app/dist
+
+/app/src-tauri/gen/schemas
+
+CLAUDE.local.md
+
+# macOS
+.DS_Store
+
+*.log
+/recordings

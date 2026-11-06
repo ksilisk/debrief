@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/capture", "crates/cli", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/ksilisk/debrief"
+
+[workspace.dependencies]
+# Internal crates
+debrief-core = { path = "crates/core" }
+debrief-capture = { path = "crates/capture" }
+
+# Shared external crates. Add new ones here and use `name.workspace = true` in member crates.
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
