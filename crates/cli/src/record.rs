@@ -1,5 +1,5 @@
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,17 +10,23 @@ use chrono::Local;
 use debrief_capture::{
     AudioChunk, Capture, Handler, Options, Source, SystemAudio, Video, VideoTarget,
 };
-use debrief_core::recording::{RecordedTracks, Track, TrackStats, Tracks};
-use serde::Serialize;
+use debrief_core::meeting::{
+    self, Language, MEETING_FILE, Meeting, Settings, VIDEO_FILE, VideoFile,
+};
+use debrief_core::recording::{Track, TrackStats, Tracks};
 
 use crate::format::{clock, parse_duration, size};
 
-const VIDEO_FILE: &str = "screen.mp4";
-const LOG_FILE: &str = "record-log.json";
-
 #[derive(clap::Args)]
 pub struct Args {
-    /// Folder for the recording. Default: ~/Documents/Debrief/<date and time>.
+    /// Meeting title, also used in the folder name.
+    #[arg(long, default_value = "")]
+    title: String,
+    /// Language of the meeting for transcription: auto, ru or en.
+    #[arg(long, default_value = "auto")]
+    language: Language,
+    /// Folder for the recording. Default: a new folder in ~/Documents/Debrief named
+    /// after the date, time and title.
     #[arg(long)]
     out: Option<PathBuf>,
     /// Microphone ID from `debrief sources`. Default: the system default.
@@ -47,15 +53,21 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
+    let pressed_at = Local::now().fixed_offset();
     let folder = match &args.out {
-        Some(folder) => folder.clone(),
-        None => default_folder()?,
+        Some(folder) => {
+            fs::create_dir_all(folder)
+                .with_context(|| format!("could not create {}", folder.display()))?;
+            if folder.join(MEETING_FILE).exists() || folder.join(Track::Me.file_name()).exists() {
+                bail!("{} already has a recording", folder.display());
+            }
+            folder.clone()
+        }
+        None => meeting::create_folder(
+            &library_folder()?,
+            &meeting::folder_name(&pressed_at, &args.title),
+        )?,
     };
-    fs::create_dir_all(&folder)
-        .with_context(|| format!("could not create {}", folder.display()))?;
-    if folder.join(Track::Me.file_name()).exists() {
-        bail!("{} already has a recording", folder.display());
-    }
 
     let video_path = folder.join(VIDEO_FILE);
     let target = match (args.screen, args.window) {
@@ -87,7 +99,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         tracks: Mutex::new(Some(Tracks::create(&folder)?)),
         error: Mutex::new(None),
     });
-    let started_at = Local::now();
     let capture = match Capture::start(&options, recorder.clone()) {
         Ok(capture) => capture,
         Err(error) => {
@@ -100,6 +111,26 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         }
     };
     let info = capture.info().clone();
+
+    let mut meeting = Meeting::new(
+        args.title.clone(),
+        Local::now().fixed_offset(),
+        Settings {
+            language: args.language,
+        },
+    );
+    meeting.tracks.me.source = info.microphone.clone();
+    meeting.tracks.them.source = info.system_audio.clone();
+    meeting.video = info.video.clone().map(|source| VideoFile {
+        file: VIDEO_FILE.to_string(),
+        source,
+        fps: args.fps,
+        bytes: None,
+    });
+    if let Err(error) = meeting.save(&folder) {
+        let _ = capture.stop();
+        return Err(error.into());
+    }
 
     println!("Recording to {}", folder.display());
     println!("  Me:    {}", info.microphone);
@@ -134,22 +165,16 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     let error = lock(&recorder.error).clone();
     let video_bytes = fs::metadata(&video_path).map(|meta| meta.len()).ok();
 
-    let log = RecordLog {
-        debrief_version: debrief_core::VERSION,
-        started_at: started_at.to_rfc3339(),
-        duration_seconds,
-        microphone: &info.microphone,
-        system_audio: &info.system_audio,
-        video: info.video.as_deref().map(|description| VideoLog {
-            description,
-            file: VIDEO_FILE,
-            bytes: video_bytes,
-        }),
-        tracks: &tracks,
-        error: error.as_deref(),
-    };
-    write_log(&folder.join(LOG_FILE), &log)?;
-    print_summary(&folder, &tracks, video_bytes);
+    meeting.recording.stopped_at = Some(Local::now().fixed_offset());
+    meeting.recording.duration_seconds = duration_seconds;
+    meeting.recording.error = error.clone();
+    meeting.tracks.me.stats = Some(tracks.me);
+    meeting.tracks.them.stats = Some(tracks.them);
+    if let Some(video) = &mut meeting.video {
+        video.bytes = video_bytes;
+    }
+    meeting.save(&folder)?;
+    print_summary(&folder, &meeting);
 
     stopped?;
     if let Some(error) = error {
@@ -182,25 +207,6 @@ impl Handler for Recorder {
     }
 }
 
-#[derive(Serialize)]
-struct RecordLog<'a> {
-    debrief_version: &'a str,
-    started_at: String,
-    duration_seconds: f64,
-    microphone: &'a str,
-    system_audio: &'a str,
-    video: Option<VideoLog<'a>>,
-    tracks: &'a RecordedTracks,
-    error: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-struct VideoLog<'a> {
-    description: &'a str,
-    file: &'a str,
-    bytes: Option<u64>,
-}
-
 fn print_status(elapsed: Duration, recorder: &Recorder, video_bytes: Option<u64>) {
     let (me, them) = match lock(&recorder.tracks).as_ref() {
         Some(tracks) => (
@@ -223,48 +229,39 @@ fn print_status(elapsed: Duration, recorder: &Recorder, video_bytes: Option<u64>
     let _ = std::io::stdout().flush();
 }
 
-fn print_summary(folder: &Path, tracks: &RecordedTracks, video_bytes: Option<u64>) {
+fn print_summary(folder: &Path, meeting: &Meeting) {
     println!("Saved to {}", folder.display());
-    for (track, stats) in [(Track::Me, &tracks.me), (Track::Them, &tracks.them)] {
+    for track in [&meeting.tracks.me, &meeting.tracks.them] {
+        let Some(stats) = &track.stats else {
+            continue;
+        };
         let first = stats
             .first_chunk_at
             .map(|at| format!("first audio at {at:.3} s"))
             .unwrap_or_else(|| "no audio".into());
         println!(
             "  {:<10} {}  {}  {first}, {} timing fixes, rates {:?}",
-            track.file_name(),
+            track.file,
             clock(stats.duration_seconds()),
             size(stats.bytes()),
             fixes(stats),
             stats.source_rates,
         );
     }
-    if let Some(bytes) = video_bytes {
-        println!("  {VIDEO_FILE:<10} {}", size(bytes));
+    if let Some(video) = &meeting.video {
+        let bytes = video.bytes.map(size).unwrap_or_else(|| "missing".into());
+        println!("  {:<10} {bytes}", video.file);
     }
-    println!("  {LOG_FILE}");
+    println!("  {MEETING_FILE}");
 }
 
 fn fixes(stats: &TrackStats) -> u64 {
     stats.gaps_filled + stats.overlaps_trimmed
 }
 
-fn write_log(path: &Path, log: &RecordLog<'_>) -> anyhow::Result<()> {
-    let file = File::create(path).with_context(|| format!("could not write {}", path.display()))?;
-    let mut writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, log)?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
-    Ok(())
-}
-
-fn default_folder() -> anyhow::Result<PathBuf> {
+fn library_folder() -> anyhow::Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set; pass --out")?;
-    let name = Local::now().format("%Y-%m-%d %H-%M-%S").to_string();
-    Ok(PathBuf::from(home)
-        .join("Documents")
-        .join("Debrief")
-        .join(name))
+    Ok(PathBuf::from(home).join("Documents").join("Debrief"))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

@@ -17,7 +17,7 @@ debrief-capture = { path = "crates/capture" }
 # Shared external crates. Add new ones here and use `name.workspace = true` in member crates.
 anyhow = "1.0.104"
 block2 = "0.6.2"
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 clap = { version = "4.6.7", features = ["derive"] }
 ctrlc = "3.5.2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
@@ -39,6 +39,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSArray",
     "NSDictionary",
+    "NSObject",
     "NSString",
     "NSUUID",
     "NSValue",

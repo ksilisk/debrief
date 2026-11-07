@@ -15,7 +15,7 @@ Status: agreed plan, November 2026.
 | Audio files | `hound` writes WAV while recording; macOS `afconvert` makes m4a afterwards | WAV survives a crash best |
 | Resampling | `rubato` → 16 kHz mono for Whisper | |
 | Speech to text | `whisper-rs` (whisper.cpp, Metal), model large-v3-turbo | `transcribe-rs` if Parakeet wins the M0.3 test |
-| Silence detection | Silero VAD inside whisper.cpp | Bindings to be confirmed in M0.3 |
+| Silence detection | Silero VAD inside whisper.cpp | Bindings to be confirmed in M1.3 |
 | Token counter | `tokenizers` + Whisper's tokenizer file | Exact count for “Names and terms” (limit: 224 tokens) |
 | Summaries | `reqwest` + serde, OpenAI chat completions with streaming | Providers: OpenAI-compatible server, OpenAI, Claude, OpenRouter |
 | API keys | `keyring` | macOS Keychain |
@@ -58,9 +58,36 @@ debrief/
 
 Audio and video never leave the computer. Only the transcript text is sent, and only to the summary provider the user chose.
 
+## Meeting folder
+
+Each meeting gets its own folder inside the folder chosen in Settings (default `~/Documents/Debrief`), named after the date, time and title, for example `2026-11-04 14-30 Product sync`. Characters that a file system rejects are dropped from the title. A taken name gets ` (2)`, ` (3)` and so on.
+
+```
+2026-11-04 14-30 Product sync/
+├── meeting.json     title, times, settings, tracks, marked moments, processing steps
+├── me.wav           microphone; me.m4a after processing
+├── them.wav         system audio; them.m4a after processing
+├── screen.mp4       only when video is on
+├── transcript.md    Me and Them with timecodes
+├── transcript.txt
+├── transcript.srt
+├── summary.md       only when summaries are on
+└── summary.txt
+```
+
+`meeting.json` is written when recording starts and saved again after each change, through a temporary file and a rename, so a crash never leaves half a file:
+
+- `format`: 1. It changes only when an older Debrief would read a field wrong; new optional fields keep the number. Debrief refuses a meeting with a newer format. Until v0.1 ships, format 1 may still change.
+- `recording`: `started_at`, `stopped_at` (empty while recording or after a crash), `duration_seconds`, `error`.
+- `settings`: `language` (`auto`, `ru` or `en`).
+- `tracks.me`, `tracks.them`: file name, source (the microphone, or the app or apps), recorder diagnostics.
+- `video`: file, source, frame rate, size.
+- `marks`: marked moments, in seconds from the start of the audio.
+- `steps`: the status of each processing step (`convert`, `transcribe`, `merge`, `export`, `summary`, `compress`): `pending`, `running`, `done`, `skipped` or `failed`. Processing resumes at the first step that isn't done or skipped. M1.3 and M1.5 add the models they use.
+
 ## Main risks
 
 - ScreenCaptureKit details: choosing the microphone, audio-only mode (the stream still needs a display; it gets a tiny one that is ignored). Covered by M0.2. M0.2 also showed that the app filter misses Chrome's helper processes, so one-app audio uses a Core Audio process tap.
-- Quality of mixed Russian and English transcription. Covered by M0.3.
-- Local summary quality within 16 GB of memory. Covered by M0.4; remote providers are the fallback.
+- Quality of mixed Russian and English transcription. Covered by M0.3, which runs once Debrief records real meetings; until then the default stays large-v3-turbo.
+- Local servers often run with a small context and cut longer input. The app doesn't recommend a local model; M1.5 checks the OpenAI-compatible path against Ollama or LM Studio.
 - The `screencapturekit` crate releases major versions often; pin it exactly.

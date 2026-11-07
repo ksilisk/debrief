@@ -3,7 +3,7 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use hound::{SampleFormat, WavSpec, WavWriter};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const SAMPLE_RATE: u32 = 48_000;
 
@@ -36,7 +36,8 @@ impl Track {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TrackStats {
     pub chunks: u64,
     pub frames: u64,
@@ -293,13 +294,7 @@ impl LinearResampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn temp_folder(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("debrief-test-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&folder).expect("create temp folder");
-        folder
-    }
+    use crate::testing::temp_folder;
 
     fn read(path: &Path) -> Vec<i16> {
         hound::WavReader::open(path)
