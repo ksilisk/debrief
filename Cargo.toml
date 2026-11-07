@@ -16,4 +16,35 @@ debrief-capture = { path = "crates/capture" }
 
 # Shared external crates. Add new ones here and use `name.workspace = true` in member crates.
 anyhow = "1.0.104"
+block2 = "0.6.2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.7", features = ["derive"] }
+ctrlc = "3.5.2"
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
+hound = "3.5.1"
+objc2 = "0.6.5"
+objc2-core-audio = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "AudioHardware",
+    "HostTime",
+    "block2",
+    "dispatch2",
+    "objc2",
+    "objc2-core-audio-types",
+    "objc2-foundation",
+] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes", "objc2"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSDictionary",
+    "NSString",
+    "NSUUID",
+    "NSValue",
+] }
+# Pinned exactly: this crate releases breaking versions often.
+screencapturekit = { version = "=11.1.2", features = ["macos_15_0"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"

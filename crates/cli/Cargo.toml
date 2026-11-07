@@ -14,5 +14,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
+debrief-capture.workspace = true
 debrief-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true

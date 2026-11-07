@@ -1,7 +1,9 @@
 //! `debrief`: record and process meetings from the terminal.
-//!
-//! Used for the M0 tests and for automation. The commands are placeholders
-//! until their milestones land.
+
+mod analyze;
+mod format;
+mod record;
+mod sources;
 
 use std::path::PathBuf;
 
@@ -18,8 +20,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Record the microphone and system audio as separate tracks (M0.2).
-    Record,
+    /// List the microphones, apps, screens and windows you can record.
+    Sources,
+    /// Record the microphone and system audio as separate tracks, with optional screen video.
+    Record(record::Args),
     /// Transcribe a recorded meeting folder (M1).
     Process {
         /// Meeting folder to process.
@@ -30,16 +34,21 @@ enum Command {
         /// Meeting folder to summarize.
         folder: PathBuf,
     },
+    /// Measure sync and echo between me.wav and them.wav (M0.2 test).
+    #[command(hide = true)]
+    Analyze(analyze::Args),
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Record => not_yet("record", "M0.2"),
+        Command::Sources => sources::run(),
+        Command::Record(args) => record::run(args),
         Command::Process { folder } => not_yet(&format!("process {}", folder.display()), "M1"),
         Command::Summarize { folder } => {
             not_yet(&format!("summarize {}", folder.display()), "M1.5")
         }
+        Command::Analyze(args) => analyze::run(args),
     }
 }
 

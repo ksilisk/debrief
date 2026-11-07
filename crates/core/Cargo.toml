@@ -9,3 +9,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+hound.workspace = true
+serde.workspace = true
+thiserror.workspace = true
