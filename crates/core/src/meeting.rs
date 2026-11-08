@@ -20,6 +20,7 @@ pub const MEETING_FILE: &str = "meeting.json";
 pub const VIDEO_FILE: &str = "screen.mp4";
 
 const TEMP_FILE: &str = ".meeting.json.tmp";
+const JOINED_TEMP_FILE: &str = ".screen-joined.mp4";
 /// Keeps the folder name well under the 255-byte limit, even with the date and a " (2)".
 const MAX_TITLE_BYTES: usize = 120;
 const MAX_SAME_NAME: u32 = 999;
@@ -49,6 +50,8 @@ pub enum MeetingError {
         path.display()
     )]
     Newer { path: PathBuf, found: u64 },
+    #[error("could not join the video parts: {0}")]
+    JoinVideo(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +66,8 @@ pub struct Meeting {
     pub video: Option<VideoFile>,
     #[serde(default)]
     pub marks: Vec<Mark>,
+    #[serde(default)]
+    pub pauses: Vec<Pause>,
     /// A step that is not listed is pending.
     #[serde(default)]
     pub steps: BTreeMap<Step, StepState>,
@@ -145,12 +150,35 @@ pub struct VideoFile {
     pub source: String,
     pub fps: u32,
     pub bytes: Option<u64>,
+    /// One per stretch between pauses, until they are joined into `file`. Still
+    /// listed after a failed join or a crash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<VideoPart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoPart {
+    pub file: String,
+    /// Where the part starts in the recorded audio.
+    pub at_seconds: f64,
+}
+
+pub fn video_part_name(number: usize) -> String {
+    format!("screen-{number}.mp4")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Mark {
     /// Position in the recorded audio.
     pub at_seconds: f64,
+}
+
+/// Paused time is not in the audio; this keeps the real clock time recoverable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Pause {
+    /// Position in the recorded audio where the pause happened.
+    pub at_seconds: f64,
+    pub duration_seconds: f64,
 }
 
 /// Processing steps in the order they run.
@@ -221,6 +249,7 @@ impl Meeting {
             },
             video: None,
             marks: Vec::new(),
+            pauses: Vec::new(),
             steps: BTreeMap::new(),
         }
     }
@@ -278,6 +307,54 @@ impl Meeting {
             .into_iter()
             .find(|&step| !matches!(self.status(step), StepStatus::Done | StepStatus::Skipped))
     }
+}
+
+/// Turns the video parts into `video.file`: renames a single part, or joins
+/// several with `join(parts, output)`. When the join fails, the parts stay.
+pub fn finish_video<E>(
+    folder: &Path,
+    meeting: &mut Meeting,
+    join: impl FnOnce(&[(PathBuf, f64)], &Path) -> Result<(), E>,
+) -> Result<(), MeetingError>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let Some(video) = &mut meeting.video else {
+        return Ok(());
+    };
+    if video.parts.is_empty() {
+        return Ok(());
+    }
+    let target = folder.join(&video.file);
+    let write_error = |path: &Path, source| MeetingError::Write {
+        path: path.to_path_buf(),
+        source,
+    };
+    let parts: Vec<(PathBuf, f64)> = video
+        .parts
+        .iter()
+        .map(|part| (folder.join(&part.file), part.at_seconds))
+        .filter(|(path, _)| path.exists())
+        .collect();
+    match parts.as_slice() {
+        [] => {}
+        [(only, _)] => fs::rename(only, &target).map_err(|source| write_error(only, source))?,
+        _ => {
+            let temp = folder.join(JOINED_TEMP_FILE);
+            let _ = fs::remove_file(&temp);
+            if let Err(error) = join(&parts, &temp) {
+                let _ = fs::remove_file(&temp);
+                return Err(MeetingError::JoinVideo(Box::new(error)));
+            }
+            fs::rename(&temp, &target).map_err(|source| write_error(&target, source))?;
+            for (path, _) in &parts {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    video.parts.clear();
+    video.bytes = fs::metadata(&target).map(|meta| meta.len()).ok();
+    Ok(())
 }
 
 /// For example `2026-11-04 14-30 Product sync`.
@@ -513,6 +590,75 @@ mod tests {
         let convert = json.find("\"convert\"").expect("convert");
         let compress = json.find("\"compress\"").expect("compress");
         assert!(convert < compress);
+    }
+
+    fn with_parts(folder: &Path, count: usize) -> Meeting {
+        let mut meeting = sample();
+        let parts = (1..=count)
+            .map(|n| {
+                fs::write(folder.join(video_part_name(n)), format!("part {n}")).expect("write");
+                VideoPart {
+                    file: video_part_name(n),
+                    at_seconds: (n - 1) as f64 * 60.0,
+                }
+            })
+            .collect();
+        meeting.video = Some(VideoFile {
+            file: VIDEO_FILE.into(),
+            source: "Display 1".into(),
+            fps: 5,
+            bytes: None,
+            parts,
+        });
+        meeting
+    }
+
+    #[test]
+    fn a_single_video_part_is_renamed() {
+        let folder = temp_folder("video-single");
+        let mut meeting = with_parts(&folder, 1);
+        finish_video(&folder, &mut meeting, |_, _| -> Result<(), io::Error> {
+            panic!("nothing to join")
+        })
+        .expect("finish");
+        let video = meeting.video.expect("video");
+        assert!(video.parts.is_empty());
+        assert_eq!(video.bytes, Some(6));
+        assert_eq!(
+            fs::read_to_string(folder.join(VIDEO_FILE)).expect("read"),
+            "part 1"
+        );
+    }
+
+    #[test]
+    fn several_video_parts_are_joined_in_order() {
+        let folder = temp_folder("video-join");
+        let mut meeting = with_parts(&folder, 3);
+        finish_video(&folder, &mut meeting, |parts, output| {
+            let starts: Vec<f64> = parts.iter().map(|(_, at)| *at).collect();
+            assert_eq!(starts, vec![0.0, 60.0, 120.0]);
+            fs::write(output, "joined")
+        })
+        .expect("finish");
+        assert!(meeting.video.expect("video").parts.is_empty());
+        assert_eq!(
+            fs::read_to_string(folder.join(VIDEO_FILE)).expect("read"),
+            "joined"
+        );
+        assert!(!folder.join(video_part_name(2)).exists());
+    }
+
+    #[test]
+    fn video_parts_stay_when_the_join_fails() {
+        let folder = temp_folder("video-join-fails");
+        let mut meeting = with_parts(&folder, 2);
+        let result = finish_video(&folder, &mut meeting, |_, _| {
+            Err(io::Error::other("export failed"))
+        });
+        assert!(matches!(result, Err(MeetingError::JoinVideo(_))));
+        assert_eq!(meeting.video.expect("video").parts.len(), 2);
+        assert!(folder.join(video_part_name(1)).exists());
+        assert!(!folder.join(VIDEO_FILE).exists());
     }
 
     #[test]

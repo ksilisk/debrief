@@ -1,8 +1,13 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::{CaptureError, CaptureInfo, Handler, Options, Sources};
 
 pub fn sources() -> Result<Sources, CaptureError> {
+    Err(CaptureError::Unsupported)
+}
+
+pub fn join_videos(_parts: &[(PathBuf, f64)], _output: &Path) -> Result<(), CaptureError> {
     Err(CaptureError::Unsupported)
 }
 
@@ -19,8 +24,20 @@ impl Capture {
         &self.info
     }
 
+    pub fn now(&self) -> f64 {
+        0.0
+    }
+
     pub fn video_bytes(&self) -> Option<u64> {
         None
+    }
+
+    pub fn pause_video(&mut self) -> Result<(), CaptureError> {
+        Ok(())
+    }
+
+    pub fn resume_video(&mut self, _path: &Path) -> Result<(), CaptureError> {
+        Ok(())
     }
 
     pub fn stop(self) -> Result<(), CaptureError> {

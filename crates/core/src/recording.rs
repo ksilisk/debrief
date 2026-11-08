@@ -203,10 +203,7 @@ pub struct RecordedTracks {
     pub them: TrackStats,
 }
 
-/// The Me and Them tracks of one recording, sharing one origin: the timestamp
-/// of the first chunk from either track.
 pub struct Tracks {
-    origin: Option<f64>,
     me: TrackWriter,
     them: TrackWriter,
 }
@@ -214,26 +211,24 @@ pub struct Tracks {
 impl Tracks {
     pub fn create(folder: &Path) -> Result<Self, RecordingError> {
         Ok(Self {
-            origin: None,
             me: TrackWriter::create(&folder.join(Track::Me.file_name()))?,
             them: TrackWriter::create(&folder.join(Track::Them.file_name()))?,
         })
     }
 
-    /// `time` is the chunk's timestamp in seconds on the capture clock.
+    /// `offset` is the chunk's position in the recording, the same for both tracks.
     pub fn write(
         &mut self,
         track: Track,
-        time: f64,
+        offset: f64,
         sample_rate: u32,
         samples: &[f32],
     ) -> Result<(), RecordingError> {
-        let origin = *self.origin.get_or_insert(time);
         let writer = match track {
             Track::Me => &mut self.me,
             Track::Them => &mut self.them,
         };
-        writer.write(time - origin, sample_rate, samples)
+        writer.write(offset, sample_rate, samples)
     }
 
     pub fn stats(&self, track: Track) -> &TrackStats {
@@ -388,22 +383,5 @@ mod tests {
         assert_eq!(stats.gaps_filled + stats.overlaps_trimmed, 0);
         assert!(stats.frames.abs_diff(480_000) <= 1);
         assert_eq!(stats.source_rates, vec![44_100]);
-    }
-
-    #[test]
-    fn tracks_share_one_origin() {
-        let folder = temp_folder("tracks");
-        let mut tracks = Tracks::create(&folder).expect("create");
-        tracks
-            .write(Track::Them, 100.0, SAMPLE_RATE, &[0.5; CHUNK])
-            .expect("write");
-        tracks
-            .write(Track::Me, 100.25, SAMPLE_RATE, &[0.5; CHUNK])
-            .expect("write");
-        let recorded = tracks.finish().expect("finish");
-        assert_eq!(recorded.me.first_chunk_at, Some(0.25));
-        assert_eq!(recorded.me.gaps_filled, 0);
-        assert_eq!(recorded.me.frames, 12_000 + CHUNK as u64);
-        assert_eq!(recorded.them.frames, CHUNK as u64);
     }
 }

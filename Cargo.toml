@@ -5,7 +5,7 @@ members = ["crates/core", "crates/capture", "crates/cli", "app/src-tauri"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/ksilisk/debrief"
 
@@ -23,6 +23,17 @@ ctrlc = "3.5.2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
 hound = "3.5.1"
 objc2 = "0.6.5"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "AVAsset",
+    "AVAssetExportSession",
+    "AVAssetTrack",
+    "AVComposition",
+    "AVCompositionTrack",
+    "AVMediaFormat",
+    "block2",
+    "objc2-core-media",
+] }
 objc2-core-audio = { version = "0.3.2", default-features = false, features = [
     "std",
     "AudioHardware",
@@ -34,13 +45,16 @@ objc2-core-audio = { version = "0.3.2", default-features = false, features = [
     "objc2-foundation",
 ] }
 objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes", "objc2"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMBase", "CMTime", "CMTimeRange"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFString"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "NSArray",
     "NSDictionary",
+    "NSError",
     "NSObject",
     "NSString",
+    "NSURL",
     "NSUUID",
     "NSValue",
 ] }

@@ -3,6 +3,7 @@
 mod analyze;
 mod format;
 mod record;
+mod repair;
 mod sources;
 
 use std::path::PathBuf;
@@ -37,6 +38,9 @@ enum Command {
     /// Measure sync and echo between me.wav and them.wav (M0.2 test).
     #[command(hide = true)]
     Analyze(analyze::Args),
+    /// Fix a recording that a crash or forced quit cut off.
+    #[command(hide = true)]
+    Repair(repair::Args),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -49,6 +53,7 @@ fn main() -> anyhow::Result<()> {
             not_yet(&format!("summarize {}", folder.display()), "M1.5")
         }
         Command::Analyze(args) => analyze::run(args),
+        Command::Repair(args) => repair::run(args),
     }
 }
 

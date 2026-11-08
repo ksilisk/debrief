@@ -1,9 +1,11 @@
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use chrono::Local;
@@ -13,9 +15,12 @@ use debrief_capture::{
 use debrief_core::meeting::{
     self, Language, MEETING_FILE, Meeting, Settings, VIDEO_FILE, VideoFile,
 };
-use debrief_core::recording::{Track, TrackStats, Tracks};
+use debrief_core::recording::{Track, TrackStats};
+use debrief_core::session::Session;
 
 use crate::format::{clock, parse_duration, size};
+
+const STATUS_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -47,7 +52,8 @@ pub struct Args {
     /// Video frames per second.
     #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=30))]
     fps: u32,
-    /// Stop after this long, for example 90s, 30m or 1h. Default: when you press Ctrl+C.
+    /// Stop after this much recorded time, for example 90s, 30m or 1h. Default: when
+    /// you press Ctrl+C.
     #[arg(long, value_parser = parse_duration)]
     duration: Option<Duration>,
 }
@@ -69,7 +75,28 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         )?,
     };
 
-    let video_path = folder.join(VIDEO_FILE);
+    let mut draft = Meeting::new(
+        args.title.clone(),
+        pressed_at,
+        Settings {
+            language: args.language,
+        },
+    );
+    draft.video = (!args.no_video).then(|| VideoFile {
+        file: VIDEO_FILE.to_string(),
+        source: String::new(),
+        fps: args.fps,
+        bytes: None,
+        parts: Vec::new(),
+    });
+    let session = match Session::create(&folder, draft) {
+        Ok(session) => session,
+        Err(error) => {
+            let _ = fs::remove_dir(&folder);
+            return Err(error.into());
+        }
+    };
+
     let target = match (args.screen, args.window) {
         (Some(id), _) => VideoTarget::Display(id),
         (_, Some(id)) => VideoTarget::Window(id),
@@ -83,10 +110,10 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             },
             None => SystemAudio::AllApps,
         },
-        video: (!args.no_video).then(|| Video {
+        video: session.video_part().map(|path| Video {
             target,
             fps: args.fps,
-            path: video_path.clone(),
+            path,
         }),
     };
 
@@ -96,15 +123,14 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         .context("could not catch Ctrl+C")?;
 
     let recorder = Arc::new(Recorder {
-        tracks: Mutex::new(Some(Tracks::create(&folder)?)),
+        session: Mutex::new(Some(session)),
         error: Mutex::new(None),
     });
-    let capture = match Capture::start(&options, recorder.clone()) {
+    let mut capture = match Capture::start(&options, recorder.clone()) {
         Ok(capture) => capture,
         Err(error) => {
-            drop(lock(&recorder.tracks).take());
-            for track in [Track::Me, Track::Them] {
-                let _ = fs::remove_file(folder.join(track.file_name()));
+            if let Some(session) = lock(&recorder.session).take() {
+                session.discard();
             }
             let _ = fs::remove_dir(&folder);
             return Err(error.into());
@@ -112,22 +138,18 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     };
     let info = capture.info().clone();
 
-    let mut meeting = Meeting::new(
-        args.title.clone(),
-        Local::now().fixed_offset(),
-        Settings {
-            language: args.language,
-        },
-    );
-    meeting.tracks.me.source = info.microphone.clone();
-    meeting.tracks.them.source = info.system_audio.clone();
-    meeting.video = info.video.clone().map(|source| VideoFile {
-        file: VIDEO_FILE.to_string(),
-        source,
-        fps: args.fps,
-        bytes: None,
+    let started_at = Local::now().fixed_offset();
+    let saved = recorder.with_session(|session| {
+        session.update(|meeting| {
+            meeting.recording.started_at = started_at;
+            meeting.tracks.me.source = info.microphone.clone();
+            meeting.tracks.them.source = info.system_audio.clone();
+            if let (Some(video), Some(source)) = (&mut meeting.video, &info.video) {
+                video.source = source.clone();
+            }
+        })
     });
-    if let Err(error) = meeting.save(&folder) {
+    if let Some(Err(error)) = saved {
         let _ = capture.stop();
         return Err(error.into());
     }
@@ -143,38 +165,51 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         ),
         None => println!("Press Ctrl+C to stop."),
     }
+    println!("Type p and Enter to pause or resume, m and Enter to mark a moment.");
 
-    let start = Instant::now();
+    let commands = read_commands();
     loop {
-        std::thread::sleep(Duration::from_millis(500));
-        let elapsed = start.elapsed();
-        print_status(elapsed, &recorder, capture.video_bytes());
-        let time_is_up = args.duration.is_some_and(|duration| elapsed >= duration);
+        match commands.recv_timeout(STATUS_INTERVAL) {
+            Ok(Command::Pause) => {
+                if let Err(error) = toggle_pause(&recorder, &mut capture) {
+                    println!("\n{error:#}");
+                }
+            }
+            Ok(Command::Mark) => {
+                let at = capture.now();
+                match recorder.with_session(|session| session.mark(at)) {
+                    Some(Ok(mark)) => println!("\nMarked {}", clock(mark.at_seconds)),
+                    Some(Err(error)) => println!("\nCould not save the mark: {error}"),
+                    None => {}
+                }
+            }
+            Ok(Command::Stop) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => thread::sleep(STATUS_INTERVAL),
+        }
+        let recorded = print_status(&recorder, &capture);
+        let time_is_up = args
+            .duration
+            .is_some_and(|duration| recorded >= duration.as_secs_f64());
         if stop.load(Ordering::SeqCst) || time_is_up || lock(&recorder.error).is_some() {
             break;
         }
     }
     println!();
 
-    let duration_seconds = start.elapsed().as_secs_f64();
+    let stop_at = capture.now();
     let stopped = capture.stop();
-    let tracks = lock(&recorder.tracks)
-        .take()
-        .context("the tracks were already closed")?
-        .finish()?;
     let error = lock(&recorder.error).clone();
-    let video_bytes = fs::metadata(&video_path).map(|meta| meta.len()).ok();
-
-    meeting.recording.stopped_at = Some(Local::now().fixed_offset());
-    meeting.recording.duration_seconds = duration_seconds;
-    meeting.recording.error = error.clone();
-    meeting.tracks.me.stats = Some(tracks.me);
-    meeting.tracks.them.stats = Some(tracks.them);
-    if let Some(video) = &mut meeting.video {
-        video.bytes = video_bytes;
-    }
+    let session = lock(&recorder.session)
+        .take()
+        .context("the recording was already closed")?;
+    let mut meeting = session.finish(stop_at, error.clone())?;
+    let video = meeting::finish_video(&folder, &mut meeting, debrief_capture::join_videos);
     meeting.save(&folder)?;
     print_summary(&folder, &meeting);
+    if let Err(error) = video {
+        println!("{error}. The parts are kept and listed in {MEETING_FILE}.");
+    }
 
     stopped?;
     if let Some(error) = error {
@@ -183,9 +218,70 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
+enum Command {
+    Pause,
+    Mark,
+    Stop,
+}
+
+fn read_commands() -> Receiver<Command> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in io::stdin().lines() {
+            let command = match line.as_deref().map(str::trim) {
+                Ok("p") => Command::Pause,
+                Ok("m") => Command::Mark,
+                Ok("q") => Command::Stop,
+                Ok(_) => continue,
+                Err(_) => return,
+            };
+            if sender.send(command).is_err() {
+                return;
+            }
+        }
+    });
+    receiver
+}
+
+fn toggle_pause(recorder: &Recorder, capture: &mut Capture) -> anyhow::Result<()> {
+    let at = capture.now();
+    let mut guard = lock(&recorder.session);
+    let Some(session) = guard.as_mut() else {
+        return Ok(());
+    };
+    if session.is_paused() {
+        let next = session.resume(at)?;
+        drop(guard);
+        if let Some(path) = next {
+            capture
+                .resume_video(&path)
+                .context("the audio resumed, but the video could not")?;
+        }
+        println!("\nResumed.");
+    } else {
+        session.pause(at);
+        let position = session.position(at);
+        drop(guard);
+        capture
+            .pause_video()
+            .context("the audio is paused, but the video could not be")?;
+        println!(
+            "\nPaused at {}. Type p and Enter to resume.",
+            clock(position)
+        );
+    }
+    Ok(())
+}
+
 struct Recorder {
-    tracks: Mutex<Option<Tracks>>,
+    session: Mutex<Option<Session>>,
     error: Mutex<Option<String>>,
+}
+
+impl Recorder {
+    fn with_session<T>(&self, action: impl FnOnce(&mut Session) -> T) -> Option<T> {
+        lock(&self.session).as_mut().map(action)
+    }
 }
 
 impl Handler for Recorder {
@@ -194,11 +290,11 @@ impl Handler for Recorder {
             Source::Microphone => Track::Me,
             Source::System => Track::Them,
         };
-        let mut tracks = lock(&self.tracks);
-        if let Some(tracks) = tracks.as_mut() {
-            if let Err(error) = tracks.write(track, chunk.time, chunk.sample_rate, chunk.samples) {
-                self.failed(error.to_string());
-            }
+        let written = self.with_session(|session| {
+            session.audio(track, chunk.time, chunk.sample_rate, chunk.samples)
+        });
+        if let Some(Err(error)) = written {
+            self.failed(error.to_string());
         }
     }
 
@@ -207,26 +303,35 @@ impl Handler for Recorder {
     }
 }
 
-fn print_status(elapsed: Duration, recorder: &Recorder, video_bytes: Option<u64>) {
-    let (me, them) = match lock(&recorder.tracks).as_ref() {
-        Some(tracks) => (
-            tracks.stats(Track::Me).clone(),
-            tracks.stats(Track::Them).clone(),
-        ),
-        None => return,
+/// Returns the recorded time.
+fn print_status(recorder: &Recorder, capture: &Capture) -> f64 {
+    let at = capture.now();
+    let Some((recorded, paused, marks, me, them)) = recorder.with_session(|session| {
+        (
+            session.position(at),
+            session.is_paused(),
+            session.meeting().marks.len(),
+            session.stats(Track::Me).clone(),
+            session.stats(Track::Them).clone(),
+        )
+    }) else {
+        return 0.0;
     };
-    let video = video_bytes
+    let video = capture
+        .video_bytes()
         .map(|bytes| format!("  video {}", size(bytes)))
         .unwrap_or_default();
     print!(
-        "\r{}  me {}  them {}{video}  timing fixes {}/{}   ",
-        clock(elapsed.as_secs_f64()),
+        "\r{}{}  me {}  them {}{video}  marks {marks}  timing fixes {}/{}   ",
+        if paused { "Paused " } else { "" },
+        clock(recorded),
         size(me.bytes()),
         size(them.bytes()),
         fixes(&me),
         fixes(&them),
     );
-    let _ = std::io::stdout().flush();
+    let _ = io::stdout().flush();
+    recorded
 }
 
 fn print_summary(folder: &Path, meeting: &Meeting) {
@@ -240,7 +345,7 @@ fn print_summary(folder: &Path, meeting: &Meeting) {
             .map(|at| format!("first audio at {at:.3} s"))
             .unwrap_or_else(|| "no audio".into());
         println!(
-            "  {:<10} {}  {}  {first}, {} timing fixes, rates {:?}",
+            "  {:<12} {}  {}  {first}, {} timing fixes, rates {:?}",
             track.file,
             clock(stats.duration_seconds()),
             size(stats.bytes()),
@@ -249,10 +354,38 @@ fn print_summary(folder: &Path, meeting: &Meeting) {
         );
     }
     if let Some(video) = &meeting.video {
-        let bytes = video.bytes.map(size).unwrap_or_else(|| "missing".into());
-        println!("  {:<10} {bytes}", video.file);
+        if video.parts.is_empty() {
+            let bytes = video.bytes.map(size).unwrap_or_else(|| "missing".into());
+            println!("  {:<12} {bytes}", video.file);
+        } else {
+            for part in &video.parts {
+                println!("  {:<12} from {}", part.file, clock(part.at_seconds));
+            }
+        }
     }
     println!("  {MEETING_FILE}");
+    let mut recorded = format!(
+        "Recorded {}, {}",
+        clock(meeting.recording.duration_seconds),
+        count(meeting.marks.len(), "mark", "marks"),
+    );
+    if !meeting.pauses.is_empty() {
+        let paused: f64 = meeting
+            .pauses
+            .iter()
+            .map(|pause| pause.duration_seconds)
+            .sum();
+        recorded.push_str(&format!(
+            ", {} ({} in all)",
+            count(meeting.pauses.len(), "pause", "pauses"),
+            clock(paused),
+        ));
+    }
+    println!("{recorded}");
+}
+
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn fixes(stats: &TrackStats) -> u64 {

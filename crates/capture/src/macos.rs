@@ -2,10 +2,15 @@
 //! one stream on one clock. One app's sound comes from a Core Audio process tap
 //! on the same clock instead. Video, when on, is a second stream.
 
+mod join;
 mod tap;
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
+
+use objc2_core_audio::{AudioConvertHostTimeToNanos, AudioGetCurrentHostTime};
 
 use screencapturekit::error::SCStreamErrorCode;
 use screencapturekit::prelude::*;
@@ -21,6 +26,8 @@ use crate::{
     Sources, SystemAudio, Video, VideoTarget, Window,
 };
 use tap::Tap;
+
+pub use join::join_videos;
 
 const SAMPLE_RATE: i32 = 48_000;
 const VIDEO_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -96,7 +103,15 @@ pub struct Capture {
 
 struct VideoCapture {
     stream: SCStream,
+    /// `None` while paused.
+    file: Option<VideoFile>,
+    finished_bytes: u64,
+    handler: Arc<dyn Handler>,
+}
+
+struct VideoFile {
     output: SCRecordingOutput,
+    path: PathBuf,
     finished: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -187,11 +202,11 @@ impl Capture {
         };
 
         audio.start_capture().map_err(map_error)?;
-        if let Some(video) = &video {
-            if let Err(error) = video.stream.start_capture() {
-                let _ = audio.stop_capture();
-                return Err(map_error(error));
-            }
+        if let Some(video) = &video
+            && let Err(error) = video.stream.start_capture()
+        {
+            let _ = audio.stop_capture();
+            return Err(map_error(error));
         }
 
         Ok(Self {
@@ -210,17 +225,58 @@ impl Capture {
         &self.info
     }
 
+    pub fn now(&self) -> f64 {
+        unsafe { AudioConvertHostTimeToNanos(AudioGetCurrentHostTime()) as f64 / 1e9 }
+    }
+
     pub fn video_bytes(&self) -> Option<u64> {
-        self.video
-            .as_ref()
-            .map(|video| u64::try_from(video.output.recorded_file_size()).unwrap_or(0))
+        self.video.as_ref().map(|video| {
+            let current = video.file.as_ref().map_or(0, |file| {
+                u64::try_from(file.output.recorded_file_size()).unwrap_or(0)
+            });
+            video.finished_bytes + current
+        })
+    }
+
+    pub fn pause_video(&mut self) -> Result<(), CaptureError> {
+        let Some(video) = &mut self.video else {
+            return Ok(());
+        };
+        let Some(file) = video.file.take() else {
+            return Ok(());
+        };
+        video
+            .stream
+            .remove_recording_output(&file.output)
+            .map_err(map_error)?;
+        file.wait_until_finished();
+        video.finished_bytes += fs::metadata(&file.path).map_or(0, |meta| meta.len());
+        Ok(())
+    }
+
+    pub fn resume_video(&mut self, path: &Path) -> Result<(), CaptureError> {
+        let Some(video) = &mut self.video else {
+            return Ok(());
+        };
+        if video.file.is_some() {
+            return Ok(());
+        }
+        let file = VideoFile::new(path, &video.handler)?;
+        video
+            .stream
+            .add_recording_output(&file.output)
+            .map_err(map_error)?;
+        video.file = Some(file);
+        Ok(())
     }
 
     pub fn stop(self) -> Result<(), CaptureError> {
         let mut result = Ok(());
         if let Some(video) = &self.video {
             result = video.stream.stop_capture().map_err(map_error);
-            video.wait_until_finished();
+            if let Some(file) = &video.file {
+                file.wait_until_finished();
+            }
         }
         let audio = self.audio.stop_capture().map_err(map_error);
         drop(self.tap);
@@ -298,9 +354,42 @@ impl VideoCapture {
             .with_shows_cursor(true)
             .with_captures_audio(false);
 
+        let file = VideoFile::new(&video.path, handler)?;
+
+        let on_error = Arc::clone(handler);
+        let mut stream = SCStream::new_with_delegate(
+            &filter,
+            &config,
+            StreamCallbacks::new()
+                .on_error(move |error| on_error.failed(format!("Video stopped: {error}"))),
+        )
+        .map_err(map_error)?;
+        // Keeps the stream running when the recording output is removed for a pause.
+        stream
+            .add_output_handler(|_, _| {}, SCStreamOutputType::Screen)
+            .map_err(map_error)?;
+        stream
+            .add_recording_output(&file.output)
+            .map_err(map_error)?;
+
+        let info = format!("{target}, {width} × {height}, {} fps", video.fps);
+        Ok((
+            Self {
+                stream,
+                file: Some(file),
+                finished_bytes: 0,
+                handler: Arc::clone(handler),
+            },
+            info,
+        ))
+    }
+}
+
+impl VideoFile {
+    fn new(path: &Path, handler: &Arc<dyn Handler>) -> Result<Self, CaptureError> {
         let recording = SCRecordingOutputConfiguration::new()
             .map_err(map_error)?
-            .with_output_url(&video.path)
+            .with_output_url(path)
             .map_err(|error| CaptureError::Platform(error.to_string()))?
             .with_video_codec(SCRecordingOutputCodec::HEVC)
             .with_output_file_type(SCRecordingOutputFileType::MP4);
@@ -319,29 +408,11 @@ impl VideoCapture {
                 }),
         )
         .ok_or_else(|| CaptureError::Platform("could not create the video recording".into()))?;
-
-        let on_error = Arc::clone(handler);
-        let mut stream = SCStream::new_with_delegate(
-            &filter,
-            &config,
-            StreamCallbacks::new()
-                .on_error(move |error| on_error.failed(format!("Video stopped: {error}"))),
-        )
-        .map_err(map_error)?;
-        stream
-            .add_output_handler(|_, _| {}, SCStreamOutputType::Screen)
-            .map_err(map_error)?;
-        stream.add_recording_output(&output).map_err(map_error)?;
-
-        let info = format!("{target}, {width} × {height}, {} fps", video.fps);
-        Ok((
-            Self {
-                stream,
-                output,
-                finished,
-            },
-            info,
-        ))
+        Ok(Self {
+            output,
+            path: path.to_path_buf(),
+            finished,
+        })
     }
 
     fn wait_until_finished(&self) {
@@ -406,20 +477,26 @@ fn decode(bytes: &[u8], bits: u32, is_float: bool) -> Option<Vec<f32>> {
     match (is_float, bits) {
         (true, 32) => Some(
             bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
                 .collect(),
         ),
         (false, 16) => Some(
             bytes
-                .chunks_exact(2)
-                .map(|b| f32::from(i16::from_ne_bytes([b[0], b[1]])) / 32_768.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| f32::from(i16::from_ne_bytes(*b)) / 32_768.0)
                 .collect(),
         ),
         (false, 32) => Some(
             bytes
-                .chunks_exact(4)
-                .map(|b| i32::from_ne_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.0)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| i32::from_ne_bytes(*b) as f32 / 2_147_483_648.0)
                 .collect(),
         ),
         _ => None,

@@ -1,7 +1,7 @@
 //! Recording of the microphone, system audio and screen. Each OS gets its own
 //! module behind this interface.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
@@ -71,6 +71,12 @@ pub fn sources() -> Result<Sources, CaptureError> {
     platform::sources()
 }
 
+/// Joins video files into one without re-encoding. Each part is placed at its
+/// start in seconds; a gap before a part stays empty.
+pub fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), CaptureError> {
+    platform::join_videos(parts, output)
+}
+
 #[derive(Debug, Clone)]
 pub enum SystemAudio {
     AllApps,
@@ -92,6 +98,7 @@ pub enum VideoTarget {
 pub struct Video {
     pub target: VideoTarget,
     pub fps: u32,
+    /// The first file; after a pause, [`Capture::resume_video`] names the next one.
     pub path: PathBuf,
 }
 
@@ -143,8 +150,25 @@ impl Capture {
         self.0.info()
     }
 
+    /// Seconds on the clock that audio chunk times use.
+    pub fn now(&self) -> f64 {
+        self.0.now()
+    }
+
+    /// Total size of the video files so far.
     pub fn video_bytes(&self) -> Option<u64> {
         self.0.video_bytes()
+    }
+
+    /// Closes the current video file. The screen is not recorded until
+    /// [`Capture::resume_video`].
+    pub fn pause_video(&mut self) -> Result<(), CaptureError> {
+        self.0.pause_video()
+    }
+
+    /// Continues the video in a new file.
+    pub fn resume_video(&mut self, path: &Path) -> Result<(), CaptureError> {
+        self.0.resume_video(path)
     }
 
     /// Stops recording and waits until the video file is complete.

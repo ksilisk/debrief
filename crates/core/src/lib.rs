@@ -3,6 +3,8 @@
 pub mod analysis;
 pub mod meeting;
 pub mod recording;
+pub mod repair;
+pub mod session;
 
 pub const APP_NAME: &str = "Debrief";
 
