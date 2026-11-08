@@ -1,21 +1,59 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { listen } from "@tauri-apps/api/event";
   import { screenTitles, type Screen } from "./lib/screens";
+  import { clock, currentRecording, events, type Live, type LiveStatus, type Saved } from "./lib/recording";
+  import NewRecording from "./screens/NewRecording.svelte";
+  import Recording from "./screens/Recording.svelte";
 
   let screen = $state<Screen>("new");
+  let live = $state<Live | null>(null);
+  let status = $state<LiveStatus | null>(null);
+  let stopping = $state(false);
+  let saved = $state<Saved | null>(null);
+  let error = $state<string | null>(null);
+
+  /** New recording and Recording share one place: a running recording decides which one shows. */
+  const shown = $derived<Screen>(screen === "new" || screen === "recording" ? (live ? "recording" : "new") : screen);
 
   onMount(() => {
-    let unlisten: UnlistenFn | undefined;
-    // The menu bar icon and the global shortcut ask for a screen through this event.
-    listen<Screen>("navigate", (event) => {
-      screen = event.payload;
-    })
-      .then((stop) => (unlisten = stop))
+    const stops = [
+      // The menu bar icon and the global shortcut ask for a screen through this event.
+      listen<Screen>("navigate", (event) => (screen = event.payload)),
+      listen<Live>(events.started, (event) => {
+        live = event.payload;
+        status = null;
+        stopping = false;
+        saved = null;
+        error = null;
+        screen = "recording";
+      }),
+      listen<LiveStatus>(events.status, (event) => (status = event.payload)),
+      listen(events.stopping, () => (stopping = true)),
+      listen<Saved>(events.stopped, (event) => {
+        live = null;
+        status = null;
+        stopping = false;
+        saved = event.payload;
+        screen = "new";
+      }),
+      listen<string>(events.failed, (event) => {
+        error = event.payload;
+        screen = "new";
+      }),
+    ].map((listening) => listening.catch(() => undefined));
+
+    currentRecording()
+      .then((current) => {
+        if (current) live = current;
+      })
       .catch(() => {
         // Opened in a plain browser (npm run dev) instead of the Tauri window.
       });
-    return () => unlisten?.();
+
+    return () => {
+      for (const listening of stops) void listening.then((unlisten) => unlisten?.());
+    };
   });
 </script>
 
@@ -26,7 +64,7 @@
       type="button"
       class="icon-btn"
       aria-label="Settings"
-      aria-current={screen === "settings"}
+      aria-current={shown === "settings"}
       onclick={() => (screen = "settings")}
     >
       <svg
@@ -53,7 +91,7 @@
       <button
         type="button"
         class="new-btn"
-        aria-current={screen === "new"}
+        aria-current={shown === "new"}
         onclick={() => (screen = "new")}
       >
         <svg
@@ -70,12 +108,25 @@
         </svg>
         New recording
       </button>
-      <p class="empty">No meetings yet.</p>
+      {#if live}
+        <button type="button" class="live-item" aria-current={shown === "recording"} onclick={() => (screen = "recording")}>
+          <b>{live.title}</b>
+          <span><i></i>{stopping ? "Saving" : status?.paused ? "Paused" : "Recording"} · {clock(status?.seconds ?? 0)}</span>
+        </button>
+      {:else}
+        <p class="empty">No meetings yet.</p>
+      {/if}
     </aside>
 
     <main class="pane">
-      <h2>{screenTitles[screen]}</h2>
-      <p class="sub">This screen is not built yet.</p>
+      {#if shown === "new"}
+        <NewRecording {saved} bind:error />
+      {:else if shown === "recording" && live}
+        <Recording {live} {status} {stopping} />
+      {:else}
+        <h2>{screenTitles[shown]}</h2>
+        <p class="sub">This screen is not built yet.</p>
+      {/if}
     </main>
   </div>
 </div>
@@ -161,6 +212,42 @@
 
   .new-btn[aria-current="true"] {
     border-color: var(--ink);
+  }
+
+  .live-item {
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--rec) 9%, transparent);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .live-item b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  .live-item span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--rec);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .live-item i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--rec);
   }
 
   .empty {

@@ -911,7 +911,10 @@ dependencies = [
 name = "debrief-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "debrief-capture",
  "debrief-core",
+ "debrief-summarize",
  "serde",
  "tauri",
  "tauri-build",
@@ -925,6 +928,7 @@ name = "debrief-capture"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "debrief-core",
  "dispatch2",
  "objc2",
  "objc2-av-foundation",

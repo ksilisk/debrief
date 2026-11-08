@@ -1,5 +1,7 @@
-//! One app's sound through a Core Audio process tap. Unlike ScreenCaptureKit's
-//! app filter, it hears the app's helper processes too (Chrome plays from those).
+//! System audio through a Core Audio process tap: every app's sound, or one
+//! app's. Unlike ScreenCaptureKit's app filter, it hears the app's helper
+//! processes too (Chrome plays from those), and unlike ScreenCaptureKit's system
+//! audio, it did not go silent when the volume keys were pressed.
 
 use std::ffi::CStr;
 use std::mem::{MaybeUninit, size_of};
@@ -30,7 +32,8 @@ use objc2_core_audio::{
     kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyNominalSampleRate,
     kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyElementMain,
     kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
-    kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, kAudioTapPropertyDescription,
+    kAudioProcessPropertyPID, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey,
+    kAudioTapPropertyDescription,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp, AudioTimeStampFlags};
 use objc2_core_foundation::{CFDictionary, CFRetained, CFString};
@@ -76,6 +79,17 @@ unsafe impl Send for Tap {}
 unsafe impl Sync for Tap {}
 
 impl Tap {
+    /// Every app's sound except this process's own.
+    pub fn start_all(handler: Arc<dyn Handler>) -> Result<Self, CaptureError> {
+        let description = unsafe {
+            CATapDescription::initMonoGlobalTapButExcludeProcesses(
+                CATapDescription::alloc(),
+                &number_array(&own_processes()?),
+            )
+        };
+        Self::start_with(description, None, handler)
+    }
+
     /// Starts at once, even if the app is not running yet: its processes are
     /// added whenever they appear.
     pub fn start(bundle_id: &str, handler: Arc<dyn Handler>) -> Result<Self, CaptureError> {
@@ -86,6 +100,15 @@ impl Tap {
                 &number_array(&processes),
             )
         };
+        Self::start_with(description, Some((bundle_id, processes)), handler)
+    }
+
+    /// `app` is the app to follow as its processes come and go.
+    fn start_with(
+        description: Retained<CATapDescription>,
+        app: Option<(&str, Vec<AudioObjectID>)>,
+        handler: Arc<dyn Handler>,
+    ) -> Result<Self, CaptureError> {
         unsafe {
             description.setName(&NSString::from_str(NAME));
             description.setPrivate(true);
@@ -157,7 +180,9 @@ impl Tap {
                 .map_err(|error| CaptureError::Platform(error.to_string()))?,
         );
 
-        this.follow_app(bundle_id, processes, description)?;
+        if let Some((bundle_id, processes)) = app {
+            this.follow_app(bundle_id, processes, description)?;
+        }
         let device = this.device;
         this.listen(device, kAudioDevicePropertyNominalSampleRate, move || {
             if let Ok(value) = nominal_rate(device) {
@@ -324,6 +349,14 @@ fn app_processes(bundle_id: &str) -> Result<Vec<AudioObjectID>, CaptureError> {
             get_string(process, kAudioProcessPropertyBundleID)
                 .is_ok_and(|id| belongs_to(&id, bundle_id))
         })
+        .collect())
+}
+
+fn own_processes() -> Result<Vec<AudioObjectID>, CaptureError> {
+    let pid = i32::try_from(std::process::id()).unwrap_or(-1);
+    Ok(get_list(SYSTEM, kAudioHardwarePropertyProcessObjectList)?
+        .into_iter()
+        .filter(|&process| get::<i32>(process, kAudioProcessPropertyPID).is_ok_and(|id| id == pid))
         .collect())
 }
 

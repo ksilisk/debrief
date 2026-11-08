@@ -10,7 +10,7 @@ Status: agreed plan, November 2026.
 | Window UI | Svelte 5 + TypeScript + Vite; plain CSS tokens; bits-ui for accessible popovers, tooltips and lists | bits-ui is added with the first screen that needs it (M2) |
 | Core | Rust (stable), tokio for background work | One engine for every OS |
 | macOS capture | `screencapturekit` crate, feature `macos_15_0` | Microphone and all-apps system audio in one stream on the same clock; video in a second stream with recording output (HEVC) |
-| One-app audio | Core Audio process tap through `objc2-core-audio` | Also hears the app's helper processes, which ScreenCaptureKit's app filter misses (Chrome plays sound from those); same clock as ScreenCaptureKit |
+| System audio | Core Audio process tap through `objc2-core-audio` | All apps, or one app with its helper processes, which ScreenCaptureKit's app filter misses (Chrome plays sound from those); ScreenCaptureKit's own system audio went silent mid-recording after volume key presses; same clock as ScreenCaptureKit |
 | Video after pauses | AVFoundation through `objc2-av-foundation` | Joins the video parts into one file without re-encoding |
 | Windows / Linux capture | `cpal` plus WASAPI / PipeWire modules | Later (v0.3), same interface |
 | Audio files | `hound` writes WAV while recording | WAV survives a crash best. Compression (m4a or other) and sizes are decided later |
@@ -46,7 +46,7 @@ debrief/
 
 ## How a meeting flows
 
-**Recording.** One ScreenCaptureKit stream delivers the microphone and system audio on the same clock. When only one app is recorded, its sound comes from a Core Audio process tap instead: the tap follows the app and its helper processes, even ones that start during the recording, and its timestamps use the same host clock. Audio is written to `me.wav` and `them.wav` (48 kHz mono), and each chunk is placed by its timestamp, so a gap becomes silence and the tracks stay aligned. With video on, a second stream writes the video.
+**Recording.** A ScreenCaptureKit stream delivers the microphone. System audio comes from a Core Audio process tap whose timestamps use the same host clock: a global tap that leaves out only Debrief's own sound, or, when one app is recorded, a tap that follows the app and its helper processes, even ones that start during the recording. Audio is written to `me.wav` and `them.wav` (48 kHz mono), and each chunk is placed by its timestamp, so a gap becomes silence and the tracks stay aligned. With video on, a second stream writes the video.
 
 **Pause and marks.** Paused time is cut out of the recording, using the same clock as the audio timestamps: audio captured during a pause is dropped, and later audio moves back by the pause's length on both tracks. The video file is closed on Pause and a new one starts on Resume (`screen-1.mp4`, `screen-2.mp4`, …); on Stop they are joined into `screen.mp4`, each at its position in the audio. Marked moments and pauses go into `meeting.json` as positions in the recorded audio.
 
@@ -108,7 +108,7 @@ The app's own files live in `~/Library/Application Support/io.github.ksilisk.deb
 
 ## Main risks
 
-- ScreenCaptureKit details: choosing the microphone, audio-only mode (the stream still needs a display; it gets a tiny one that is ignored). Covered by M0.2. M0.2 also showed that the app filter misses Chrome's helper processes, so one-app audio uses a Core Audio process tap.
+- ScreenCaptureKit details: choosing the microphone, audio-only mode (the stream still needs a display; it gets a tiny one that is ignored). Covered by M0.2. M0.2 also showed that the app filter misses Chrome's helper processes, so one-app audio uses a Core Audio process tap. All-app audio moved to a tap too (M2.2), after ScreenCaptureKit's system audio turned to silence mid-recording when the volume keys were pressed.
 - Quality of mixed Russian and English transcription. Covered by M0.3, which runs once Debrief records real meetings; until then the default stays large-v3-turbo.
 - Local servers often run with a small context and cut longer input. The app doesn't recommend a local model; M1.5 checks the OpenAI-compatible path against Ollama or LM Studio.
 - The `screencapturekit` crate releases major versions often; pin it exactly.

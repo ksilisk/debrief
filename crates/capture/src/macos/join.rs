@@ -27,9 +27,13 @@ pub fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), Captur
     }
     .ok_or_else(|| failed("could not create the video track"))?;
 
+    // A track does not keep its asset alive, and inserting a track whose asset
+    // is gone fails (-12780), so the assets live until the export is done.
+    let mut assets = Vec::with_capacity(parts.len());
     let mut end = unsafe { kCMTimeZero };
     for (path, at) in parts {
-        let source = video_track(path)?;
+        let (asset, source) = video_track(path)?;
+        assets.push(asset);
         let range = unsafe { source.timeRange() };
         let start = unsafe { CMTime::with_seconds(*at, TIMESCALE) };
         if unsafe { start.compare(end) } > 0 {
@@ -65,6 +69,7 @@ pub fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), Captur
     finished
         .recv_timeout(EXPORT_TIMEOUT)
         .map_err(|_| failed("the export did not finish"))?;
+    drop(assets);
 
     if unsafe { session.status() } == AVAssetExportSessionStatus::Completed {
         Ok(())
@@ -76,16 +81,19 @@ pub fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), Captur
     }
 }
 
-fn video_track(path: &Path) -> Result<Retained<AVAssetTrack>, CaptureError> {
+fn video_track(
+    path: &Path,
+) -> Result<(Retained<AVURLAsset>, Retained<AVAssetTrack>), CaptureError> {
     let video = unsafe { AVMediaTypeVideo }.ok_or_else(|| failed("no video media type"))?;
     let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) };
     // The async loader calls back on another thread, and the track can't be sent
     // across; this call loads the tracks here instead.
     #[allow(deprecated)]
     let tracks = unsafe { asset.tracksWithMediaType(video) };
-    tracks
+    let track = tracks
         .firstObject()
-        .ok_or_else(|| failed(&format!("{} has no video", path.display())))
+        .ok_or_else(|| failed(&format!("{} has no video", path.display())))?;
+    Ok((asset, track))
 }
 
 fn file_url(path: &Path) -> Retained<NSURL> {

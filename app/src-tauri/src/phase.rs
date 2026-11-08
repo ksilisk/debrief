@@ -1,8 +1,6 @@
 //! What the app is doing right now. The menu bar icon follows it.
 
-use std::sync::{Mutex, PoisonError};
-
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::tray;
 
@@ -11,7 +9,7 @@ use crate::tray;
     not(test),
     expect(
         dead_code,
-        reason = "the recorder (debrief-14) and processing (debrief-15) start the other phases"
+        reason = "processing (debrief-15) starts the Processing phase"
     )
 )]
 pub enum Phase {
@@ -30,24 +28,8 @@ pub enum Phase {
     },
 }
 
-/// The current phase, kept in Tauri's managed state.
-#[derive(Default)]
-pub struct Current(Mutex<Phase>);
-
-pub fn get(app: &AppHandle) -> Phase {
-    app.state::<Current>()
-        .0
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-}
-
 pub fn set(app: &AppHandle, phase: Phase) {
     if let Err(error) = tray::update(app, &phase) {
         eprintln!("Could not update the menu bar icon: {error}");
     }
-    *app.state::<Current>()
-        .0
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = phase;
 }

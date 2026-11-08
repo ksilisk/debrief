@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use debrief_core::APP_ID;
+use debrief_core::meeting::Language;
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -101,6 +102,36 @@ impl FromStr for Provider {
 pub struct Settings {
     #[serde(default)]
     pub summary: SummarySettings,
+    #[serde(default)]
+    pub recording: RecordingSettings,
+}
+
+/// The app's last choices on the New recording screen, used for the next one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecordingSettings {
+    /// A microphone ID; `None` uses the system default.
+    pub microphone: Option<String>,
+    /// The bundle ID of the one app whose sound is recorded; `None` records all apps.
+    pub app: Option<String>,
+    pub video: bool,
+    pub fps: u32,
+    /// A screen ID; `None` records the main screen.
+    pub screen: Option<u32>,
+    pub language: Language,
+}
+
+impl Default for RecordingSettings {
+    fn default() -> Self {
+        Self {
+            microphone: None,
+            app: None,
+            video: true,
+            fps: 5,
+            screen: None,
+            language: Language::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -286,8 +317,24 @@ mod tests {
         let mut settings = Settings::default();
         settings.summary.provider = Some(Provider::Anthropic);
         settings.summary.model = "claude-opus-5-5".into();
+        settings.recording.app = Some("us.zoom.xos".into());
+        settings.recording.language = Language::Auto;
         settings.save(&folder).expect("save");
         assert_eq!(Settings::load(&folder).expect("load"), settings);
+    }
+
+    #[test]
+    fn a_file_without_recording_choices_gets_the_defaults() {
+        let folder = temp_folder("settings-old");
+        fs::create_dir_all(&folder).expect("create");
+        fs::write(
+            folder.join(SETTINGS_FILE),
+            r#"{"summary": {"provider": "openai", "model": "gpt-5", "on_by_default": true}}"#,
+        )
+        .expect("write");
+        let settings = Settings::load(&folder).expect("load");
+        assert!(settings.summary.on_by_default);
+        assert_eq!(settings.recording, RecordingSettings::default());
     }
 
     #[test]

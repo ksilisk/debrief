@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+debrief-core.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

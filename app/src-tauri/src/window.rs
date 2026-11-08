@@ -13,8 +13,6 @@ const NAVIGATE: &str = "navigate";
 #[serde(rename_all = "lowercase")]
 pub enum Screen {
     New,
-    Recording,
-    Processing,
     Settings,
 }
 

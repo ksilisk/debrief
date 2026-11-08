@@ -16,7 +16,10 @@ tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 tauri = { version = "2.12.5", features = ["tray-icon"] }
+chrono.workspace = true
+debrief-capture.workspace = true
 debrief-core.workspace = true
+debrief-summarize.workspace = true
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-notification.workspace = true
 tauri-plugin-single-instance.workspace = true

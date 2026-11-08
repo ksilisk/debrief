@@ -1,22 +1,20 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use chrono::Local;
-use debrief_capture::{
-    AudioChunk, Capture, Handler, Options, Source, SystemAudio, Video, VideoTarget,
-};
+use debrief_capture::{Capture, Options, SystemAudio, Video, VideoTarget};
 use debrief_core::meeting::{
     self, Language, MEETING_FILE, Meeting, Settings, VIDEO_FILE, VideoFile,
 };
+use debrief_core::recorder::{Recorder, Status};
 use debrief_core::recording::{Track, TrackStats};
-use debrief_core::session::Session;
 
 use crate::format::{clock, parse_duration, size};
 
@@ -97,32 +95,10 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         bytes: None,
         parts: Vec::new(),
     });
-    let session = match Session::create(&folder, draft) {
-        Ok(session) => session,
-        Err(error) => {
-            let _ = fs::remove_dir(&folder);
-            return Err(error.into());
-        }
-    };
-
     let target = match (args.screen, args.window) {
         (Some(id), _) => VideoTarget::Display(id),
         (_, Some(id)) => VideoTarget::Window(id),
         _ => VideoTarget::MainDisplay,
-    };
-    let options = Options {
-        microphone: args.mic.clone(),
-        system_audio: match &args.app {
-            Some(bundle_id) => SystemAudio::App {
-                bundle_id: bundle_id.clone(),
-            },
-            None => SystemAudio::AllApps,
-        },
-        video: session.video_part().map(|path| Video {
-            target,
-            fps: args.fps,
-            path,
-        }),
     };
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -130,42 +106,29 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     ctrlc::set_handler(move || on_ctrl_c.store(true, Ordering::SeqCst))
         .context("could not catch Ctrl+C")?;
 
-    let recorder = Arc::new(Recorder {
-        session: Mutex::new(Some(session)),
-        error: Mutex::new(None),
-    });
-    let mut capture = match Capture::start(&options, recorder.clone()) {
-        Ok(capture) => capture,
-        Err(error) => {
-            if let Some(session) = lock(&recorder.session).take() {
-                session.discard();
-            }
-            let _ = fs::remove_dir(&folder);
-            return Err(error.into());
-        }
-    };
-    let info = capture.info().clone();
-
-    let started_at = Local::now().fixed_offset();
-    let saved = recorder.with_session(|session| {
-        session.update(|meeting| {
-            meeting.recording.started_at = started_at;
-            meeting.tracks.me.source = info.microphone.clone();
-            meeting.tracks.them.source = info.system_audio.clone();
-            if let (Some(video), Some(source)) = (&mut meeting.video, &info.video) {
-                video.source = source.clone();
-            }
-        })
-    });
-    if let Some(Err(error)) = saved {
-        let _ = capture.stop();
-        return Err(error.into());
-    }
+    let mut recorder = Recorder::start(&folder, draft, |video, sink| {
+        let options = Options {
+            microphone: args.mic.clone(),
+            system_audio: match &args.app {
+                Some(bundle_id) => SystemAudio::App {
+                    bundle_id: bundle_id.clone(),
+                },
+                None => SystemAudio::AllApps,
+            },
+            video: video.map(|path| Video {
+                target,
+                fps: args.fps,
+                path,
+            }),
+        };
+        Capture::start(&options, sink)
+    })?;
+    let sources = recorder.sources().clone();
 
     println!("Recording to {}", folder.display());
-    println!("  Me:    {}", info.microphone);
-    println!("  Them:  {}", info.system_audio);
-    println!("  Video: {}", info.video.as_deref().unwrap_or("off"));
+    println!("  Me:    {}", sources.microphone);
+    println!("  Them:  {}", sources.system_audio);
+    println!("  Video: {}", sources.video.as_deref().unwrap_or("off"));
     println!(
         "  Summary: {}",
         if wants_summary(&args) {
@@ -186,49 +149,42 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     let commands = read_commands();
     loop {
         match commands.recv_timeout(STATUS_INTERVAL) {
-            Ok(Command::Pause) => {
-                if let Err(error) = toggle_pause(&recorder, &mut capture) {
-                    println!("\n{error:#}");
-                }
-            }
-            Ok(Command::Mark) => {
-                let at = capture.now();
-                match recorder.with_session(|session| session.mark(at)) {
-                    Some(Ok(mark)) => println!("\nMarked {}", clock(mark.at_seconds)),
-                    Some(Err(error)) => println!("\nCould not save the mark: {error}"),
-                    None => {}
-                }
-            }
+            Ok(Command::Pause) => match recorder.toggle_pause() {
+                Ok(true) => println!(
+                    "\nPaused at {}. Type p and Enter to resume.",
+                    clock(recorder.status().position)
+                ),
+                Ok(false) => println!("\nResumed."),
+                Err(error) => println!("\n{error}"),
+            },
+            Ok(Command::Mark) => match recorder.mark() {
+                Ok(mark) => println!("\nMarked {}", clock(mark.at_seconds)),
+                Err(error) => println!("\nCould not save the mark: {error}"),
+            },
             Ok(Command::Stop) => break,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => thread::sleep(STATUS_INTERVAL),
         }
-        let recorded = print_status(&recorder, &capture);
+        let status = recorder.status();
+        print_status(&status);
         let time_is_up = args
             .duration
-            .is_some_and(|duration| recorded >= duration.as_secs_f64());
-        if stop.load(Ordering::SeqCst) || time_is_up || lock(&recorder.error).is_some() {
+            .is_some_and(|duration| status.position >= duration.as_secs_f64());
+        if stop.load(Ordering::SeqCst) || time_is_up || status.error.is_some() {
             break;
         }
     }
     println!();
 
-    let stop_at = capture.now();
-    let stopped = capture.stop();
-    let error = lock(&recorder.error).clone();
-    let session = lock(&recorder.session)
-        .take()
-        .context("the recording was already closed")?;
-    let mut meeting = session.finish(stop_at, error.clone())?;
-    let video = meeting::finish_video(&folder, &mut meeting, debrief_capture::join_videos);
-    meeting.save(&folder)?;
-    print_summary(&folder, &meeting);
-    if let Err(error) = video {
+    let stopped = recorder.stop()?;
+    print_summary(&stopped.folder, &stopped.meeting);
+    if let Some(error) = stopped.video_error {
         println!("{error}. The parts are kept and listed in {MEETING_FILE}.");
     }
-
-    stopped?;
-    if let Some(error) = error {
+    if let Some(error) = stopped.capture_error {
+        return Err(anyhow::Error::from_boxed(error));
+    }
+    if let Some(error) = stopped.meeting.recording.error {
         bail!("recording stopped early: {error}");
     }
     Ok(())
@@ -259,95 +215,22 @@ fn read_commands() -> Receiver<Command> {
     receiver
 }
 
-fn toggle_pause(recorder: &Recorder, capture: &mut Capture) -> anyhow::Result<()> {
-    let at = capture.now();
-    let mut guard = lock(&recorder.session);
-    let Some(session) = guard.as_mut() else {
-        return Ok(());
-    };
-    if session.is_paused() {
-        let next = session.resume(at)?;
-        drop(guard);
-        if let Some(path) = next {
-            capture
-                .resume_video(&path)
-                .context("the audio resumed, but the video could not")?;
-        }
-        println!("\nResumed.");
-    } else {
-        session.pause(at);
-        let position = session.position(at);
-        drop(guard);
-        capture
-            .pause_video()
-            .context("the audio is paused, but the video could not be")?;
-        println!(
-            "\nPaused at {}. Type p and Enter to resume.",
-            clock(position)
-        );
-    }
-    Ok(())
-}
-
-struct Recorder {
-    session: Mutex<Option<Session>>,
-    error: Mutex<Option<String>>,
-}
-
-impl Recorder {
-    fn with_session<T>(&self, action: impl FnOnce(&mut Session) -> T) -> Option<T> {
-        lock(&self.session).as_mut().map(action)
-    }
-}
-
-impl Handler for Recorder {
-    fn audio(&self, chunk: AudioChunk<'_>) {
-        let track = match chunk.source {
-            Source::Microphone => Track::Me,
-            Source::System => Track::Them,
-        };
-        let written = self.with_session(|session| {
-            session.audio(track, chunk.time, chunk.sample_rate, chunk.samples)
-        });
-        if let Some(Err(error)) = written {
-            self.failed(error.to_string());
-        }
-    }
-
-    fn failed(&self, message: String) {
-        lock(&self.error).get_or_insert(message);
-    }
-}
-
-/// Returns the recorded time.
-fn print_status(recorder: &Recorder, capture: &Capture) -> f64 {
-    let at = capture.now();
-    let Some((recorded, paused, marks, me, them)) = recorder.with_session(|session| {
-        (
-            session.position(at),
-            session.is_paused(),
-            session.meeting().marks.len(),
-            session.stats(Track::Me).clone(),
-            session.stats(Track::Them).clone(),
-        )
-    }) else {
-        return 0.0;
-    };
-    let video = capture
-        .video_bytes()
+fn print_status(status: &Status) {
+    let video = status
+        .video_bytes
         .map(|bytes| format!("  video {}", size(bytes)))
         .unwrap_or_default();
     print!(
-        "\r{}{}  me {}  them {}{video}  marks {marks}  timing fixes {}/{}   ",
-        if paused { "Paused " } else { "" },
-        clock(recorded),
-        size(me.bytes()),
-        size(them.bytes()),
-        fixes(&me),
-        fixes(&them),
+        "\r{}{}  me {}  them {}{video}  marks {}  timing fixes {}/{}   ",
+        if status.paused { "Paused " } else { "" },
+        clock(status.position),
+        size(status.me.bytes()),
+        size(status.them.bytes()),
+        status.marks,
+        fixes(&status.me),
+        fixes(&status.them),
     );
     let _ = io::stdout().flush();
-    recorded
 }
 
 fn print_summary(folder: &Path, meeting: &Meeting) {
@@ -418,10 +301,5 @@ fn fixes(stats: &TrackStats) -> u64 {
 }
 
 fn library_folder() -> anyhow::Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("HOME is not set; pass --out")?;
-    Ok(PathBuf::from(home).join("Documents").join("Debrief"))
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    meeting::default_library().context("HOME is not set; pass --out")
 }

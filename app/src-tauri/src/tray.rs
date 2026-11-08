@@ -1,19 +1,19 @@
 //! The menu bar icon: how it looks in each phase, and its menu.
 
+use std::sync::{Mutex, PoisonError};
+
 use debrief_core::export::clock;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, include_image};
+use tauri::{AppHandle, Manager, Wry, include_image};
 
+use crate::hotkey::{MARK_KEYS, START_OR_STOP_KEYS};
 use crate::phase::Phase;
 
 const ID: &str = "main";
 const ICON: Image<'_> = include_image!("icons/tray.png");
 const RECORDING_ICON: Image<'_> = include_image!("icons/tray-recording.png");
-
-/// Shown next to Start and Stop; the same keys as the global shortcut.
-const START_OR_STOP_KEYS: &str = "Ctrl+Cmd+R";
 
 /// What a menu item does. The window's app menu uses the same ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,8 +96,8 @@ fn entries(phase: &Phase) -> Vec<Entry> {
                     if *paused { "Resume" } else { "Pause" },
                     None,
                 ),
-                item(Action::Mark, "Mark moment", None),
-                item(Action::Stop, "Stop and process", Some(START_OR_STOP_KEYS)),
+                item(Action::Mark, "Mark moment", Some(MARK_KEYS)),
+                item(Action::Stop, "Stop recording", Some(START_OR_STOP_KEYS)),
             ]
         }
         Phase::Processing {
@@ -136,8 +136,20 @@ fn title(phase: &Phase) -> Option<String> {
     }
 }
 
+/// The menu as last shown, so that a new timer value only changes a line of text.
+#[derive(Default)]
+struct Shown(Mutex<Option<Rendered>>);
+
+struct Rendered {
+    entries: Vec<Entry>,
+    recording_icon: bool,
+    /// One for each [`Entry::Status`], in order.
+    status_items: Vec<MenuItem<Wry>>,
+}
+
 /// Adds the icon to the menu bar. [`update`] gives it its menu.
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    app.manage(Shown::default());
     TrayIconBuilder::with_id(ID)
         .icon(ICON)
         .icon_as_template(true)
@@ -151,22 +163,71 @@ pub fn update(app: &AppHandle, phase: &Phase) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(ID) else {
         return Ok(());
     };
+    let shown = app.state::<Shown>();
+    let mut shown = shown.0.lock().unwrap_or_else(PoisonError::into_inner);
+    let entries = entries(phase);
+
     // Red only while sound is being recorded; otherwise a template icon that follows the menu bar.
-    if matches!(phase, Phase::Recording { paused: false, .. }) {
-        tray.set_icon_with_as_template(Some(RECORDING_ICON), false)?;
-    } else {
-        tray.set_icon_with_as_template(Some(ICON), true)?;
+    let recording_icon = matches!(phase, Phase::Recording { paused: false, .. });
+    if shown
+        .as_ref()
+        .is_none_or(|rendered| rendered.recording_icon != recording_icon)
+    {
+        if recording_icon {
+            tray.set_icon_with_as_template(Some(RECORDING_ICON), false)?;
+        } else {
+            tray.set_icon_with_as_template(Some(ICON), true)?;
+        }
     }
     tray.set_title(title(phase))?;
-    tray.set_menu(Some(menu(app, &entries(phase))?))?;
+
+    match shown.as_mut() {
+        Some(rendered) if same_items(&rendered.entries, &entries) => {
+            let changed = rendered
+                .entries
+                .iter()
+                .zip(&entries)
+                .filter(|(old, _)| matches!(old, Entry::Status(_)))
+                .zip(&rendered.status_items);
+            for ((old, new), item) in changed {
+                if let (true, Entry::Status(text)) = (old != new, new) {
+                    item.set_text(text)?;
+                }
+            }
+            rendered.entries = entries;
+            rendered.recording_icon = recording_icon;
+        }
+        _ => {
+            let (menu, status_items) = menu(app, &entries)?;
+            tray.set_menu(Some(menu))?;
+            *shown = Some(Rendered {
+                entries,
+                recording_icon,
+                status_items,
+            });
+        }
+    }
     Ok(())
 }
 
-fn menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<tauri::Wry>> {
+/// Whether two menus differ at most in the text of their status lines.
+fn same_items(old: &[Entry], new: &[Entry]) -> bool {
+    old.len() == new.len()
+        && old.iter().zip(new).all(|(old, new)| {
+            matches!((old, new), (Entry::Status(_), Entry::Status(_))) || old == new
+        })
+}
+
+fn menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<(Menu<Wry>, Vec<MenuItem<Wry>>)> {
     let menu = Menu::new(app)?;
+    let mut status_items = Vec::new();
     for entry in entries {
         match entry {
-            Entry::Status(text) => menu.append(&MenuItem::new(app, text, false, None::<&str>)?)?,
+            Entry::Status(text) => {
+                let item = MenuItem::new(app, text, false, None::<&str>)?;
+                menu.append(&item)?;
+                status_items.push(item);
+            }
             Entry::Item {
                 action,
                 label,
@@ -175,7 +236,7 @@ fn menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<tauri::Wry>> {
             Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
         }
     }
-    Ok(menu)
+    Ok((menu, status_items))
 }
 
 #[cfg(test)]
@@ -263,6 +324,21 @@ mod tests {
             [Action::OpenWindow, Action::Settings, Action::Quit]
         );
         assert_eq!(title(&phase).as_deref(), Some("61%"));
+    }
+
+    #[test]
+    fn a_new_time_keeps_the_menu_items() {
+        let later = Phase::Recording {
+            title: "Sprint planning".into(),
+            elapsed_seconds: 1422.0,
+            paused: false,
+        };
+        assert!(same_items(&entries(&recording(false)), &entries(&later)));
+        assert!(!same_items(
+            &entries(&recording(false)),
+            &entries(&recording(true))
+        ));
+        assert!(!same_items(&entries(&Phase::Idle), &entries(&later)));
     }
 
     #[test]

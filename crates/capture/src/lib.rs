@@ -14,6 +14,8 @@ mod unsupported;
 #[cfg(not(target_os = "macos"))]
 use unsupported as platform;
 
+mod recorder;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
     #[error("recording is not supported on this system yet")]

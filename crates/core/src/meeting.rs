@@ -368,6 +368,11 @@ where
     Ok(())
 }
 
+/// `~/Documents/Debrief`, where new meeting folders go.
+pub fn default_library() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Documents").join(crate::APP_NAME))
+}
+
 /// For example `2026-11-04 14-30 Product sync`.
 pub fn folder_name(started_at: &DateTime<FixedOffset>, title: &str) -> String {
     let stamp = started_at.format("%Y-%m-%d %H-%M").to_string();

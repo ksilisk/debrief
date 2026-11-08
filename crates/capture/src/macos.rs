@@ -1,6 +1,6 @@
-//! ScreenCaptureKit records the microphone and, for all apps, system audio in
-//! one stream on one clock. One app's sound comes from a Core Audio process tap
-//! on the same clock instead. Video, when on, is a second stream.
+//! ScreenCaptureKit records the microphone. System audio, of all apps or one,
+//! comes from a Core Audio process tap on the same clock. Video, when on, is a
+//! second ScreenCaptureKit stream.
 
 mod join;
 mod tap;
@@ -96,7 +96,7 @@ pub fn sources() -> Result<Sources, CaptureError> {
 
 pub struct Capture {
     audio: SCStream,
-    tap: Option<Tap>,
+    tap: Tap,
     video: Option<VideoCapture>,
     info: CaptureInfo,
 }
@@ -139,9 +139,12 @@ impl Capture {
         // Started first: creating its device can take a couple of seconds
         // (seen with AirPods), and the start of the call should not be lost.
         let (tap, system_audio) = match &options.system_audio {
-            SystemAudio::AllApps => (None, "All apps".to_string()),
+            SystemAudio::AllApps => (
+                Tap::start_all(Arc::clone(&handler))?,
+                "All apps".to_string(),
+            ),
             SystemAudio::App { bundle_id } => (
-                Some(Tap::start(bundle_id, Arc::clone(&handler))?),
+                Tap::start(bundle_id, Arc::clone(&handler))?,
                 app_name(&content, bundle_id),
             ),
         };
@@ -157,10 +160,9 @@ impl Capture {
             .with_width(16)
             .with_height(16)
             .with_fps(1)
-            .with_captures_audio(tap.is_none())
+            .with_captures_audio(false)
             .with_sample_rate(SAMPLE_RATE)
             .with_channel_count(1)
-            .with_excludes_current_process_audio(true)
             .with_captures_microphone(true)
             .and_then(|config| config.with_microphone_capture_device_id(&microphone.id))
             .map_err(map_error)?;
@@ -176,15 +178,6 @@ impl Capture {
         audio
             .add_output_handler(|_, _| {}, SCStreamOutputType::Screen)
             .map_err(map_error)?;
-        if tap.is_none() {
-            let system = Arc::clone(&handler);
-            audio
-                .add_output_handler(
-                    move |sample, _| deliver(system.as_ref(), Source::System, &sample),
-                    SCStreamOutputType::Audio,
-                )
-                .map_err(map_error)?;
-        }
         let mic = Arc::clone(&handler);
         audio
             .add_output_handler(

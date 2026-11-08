@@ -6,6 +6,7 @@ pub mod export;
 mod files;
 pub mod meeting;
 pub mod process;
+pub mod recorder;
 pub mod recording;
 pub mod repair;
 pub mod session;
