@@ -5,9 +5,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use debrief_core::APP_ID;
 use sha2::{Digest, Sha256};
 
-const APP_ID: &str = "io.github.ksilisk.debrief";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

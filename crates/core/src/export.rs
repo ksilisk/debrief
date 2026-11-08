@@ -111,6 +111,14 @@ fn markdown(meeting: &Meeting, transcript: &Transcript) -> String {
 }
 
 fn plain_text(meeting: &Meeting, transcript: &Transcript) -> String {
+    let mut out = text_for_summary(meeting, transcript);
+    out.push('\n');
+    out.push_str(&ending(transcript));
+    out
+}
+
+/// The plain text transcript without the note about echo lines.
+pub(crate) fn text_for_summary(meeting: &Meeting, transcript: &Transcript) -> String {
     let mut out = format!("{}\n{}\n\n", title(meeting), details(meeting, transcript));
     let items = timeline(meeting, transcript);
     for item in &items {
@@ -129,8 +137,6 @@ fn plain_text(meeting: &Meeting, transcript: &Transcript) -> String {
             )),
         }
     }
-    out.push('\n');
-    out.push_str(&ending(transcript));
     out
 }
 
@@ -198,7 +204,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
-fn title(meeting: &Meeting) -> String {
+pub(crate) fn title(meeting: &Meeting) -> String {
     match meeting.title.trim() {
         "" => format!("Meeting · {}", when(meeting)),
         title => title.to_string(),
@@ -214,7 +220,7 @@ fn when(meeting: &Meeting) -> String {
 }
 
 /// For example `Wed 4 Nov 2026, 14:30 · 47 min · Russian + English`.
-fn details(meeting: &Meeting, transcript: &Transcript) -> String {
+pub(crate) fn details(meeting: &Meeting, transcript: &Transcript) -> String {
     let mut parts = vec![when(meeting), length(meeting.recording.duration_seconds)];
     if let Some(languages) = languages(transcript) {
         parts.push(languages);

@@ -9,7 +9,9 @@ use debrief_core::export::{MARKDOWN_FILE, SUBTITLES_FILE, TEXT_FILE};
 use debrief_core::meeting::Step;
 use debrief_core::process::{Event, ProcessError, process};
 use debrief_core::recording::Track;
+use debrief_core::summary::{self, Summarizer};
 use debrief_core::transcript::{TRANSCRIPT_FILE, Transcript};
+use debrief_summarize::RemoteModel;
 use debrief_transcribe::Whisper;
 use debrief_transcribe::models::LARGE_V3_TURBO;
 
@@ -54,6 +56,15 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     println!("Loading Whisper {name}");
     let mut whisper = Whisper::load(&path, &name)?;
 
+    let (mut summarizer, setup_problem) = match RemoteModel::from_settings() {
+        Ok(model) => (model, None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let summary_label = summarizer
+        .as_ref()
+        .map(|model| model.model().to_string())
+        .unwrap_or_default();
+
     let cancelled = Arc::new(AtomicBool::new(false));
     let on_ctrl_c = Arc::clone(&cancelled);
     ctrlc::set_handler(move || on_ctrl_c.store(true, Ordering::SeqCst))
@@ -62,40 +73,61 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     let started = Instant::now();
     let mut track_started = started;
     let mut ran = false;
-    let result = process(&args.folder, &mut whisper, &cancelled, &mut |event| {
-        match event {
-            Event::Started(Step::Transcribe) => {
-                println!("Transcribing (Ctrl+C stops; run again to continue)")
-            }
-            Event::Started(Step::Merge) => println!("Merging Me and Them, marking echo lines"),
-            Event::Started(Step::Export) => println!("Writing the transcript files"),
-            Event::Started(_) | Event::Finished(_) => {}
-            Event::Transcribing { track, done } => {
-                if done == 0.0 {
-                    track_started = Instant::now();
+    let result = process(
+        &args.folder,
+        &mut whisper,
+        summarizer
+            .as_mut()
+            .map(|model| model as &mut dyn Summarizer),
+        &cancelled,
+        &mut |event| {
+            match event {
+                Event::Started(Step::Transcribe) => {
+                    println!("Transcribing (Ctrl+C stops; run again to continue)")
                 }
-                let label = match track {
-                    Track::Me => "Me",
-                    Track::Them => "Them",
-                };
-                print!(
-                    "\r  {label:<5} {:3.0}%  {}   ",
-                    done * 100.0,
-                    clock(track_started.elapsed().as_secs_f64())
-                );
-                if done >= 1.0 {
-                    println!();
+                Event::Started(Step::Merge) => println!("Merging Me and Them, marking echo lines"),
+                Event::Started(Step::Export) => println!("Writing the transcript files"),
+                Event::Started(Step::Summary) => {
+                    println!("Writing the summary with {summary_label}")
                 }
-                let _ = io::stdout().flush();
+                Event::Finished(Step::Summary) => println!(),
+                Event::Started(_) | Event::Finished(_) => {}
+                Event::Summarizing { .. } => crate::summarize::show_progress(event),
+                Event::Transcribing { track, done } => {
+                    if done == 0.0 {
+                        track_started = Instant::now();
+                    }
+                    let label = match track {
+                        Track::Me => "Me",
+                        Track::Them => "Them",
+                    };
+                    print!(
+                        "\r  {label:<5} {:3.0}%  {}   ",
+                        done * 100.0,
+                        clock(track_started.elapsed().as_secs_f64())
+                    );
+                    if done >= 1.0 {
+                        println!();
+                    }
+                    let _ = io::stdout().flush();
+                }
             }
-        }
-        ran = true;
-    });
+            ran = true;
+        },
+    );
     let meeting = match result {
         Ok(meeting) => meeting,
         Err(ProcessError::Cancelled) => {
             println!("\nStopped. Run the same command to continue where it stopped.");
             return Ok(());
+        }
+        Err(ProcessError::NoSummaryProvider) => {
+            let reason = setup_problem.unwrap_or_else(|| "they are not set up".into());
+            bail!(
+                "the transcript is saved, but no summary was written: summaries are on for this \
+                 meeting and {reason}. Run `debrief config summaries`, then `debrief summarize {}`",
+                args.folder.display()
+            );
         }
         Err(error) => return Err(error.into()),
     };
@@ -139,6 +171,11 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     println!("Saved to {}", args.folder.display());
     for file in [MARKDOWN_FILE, TEXT_FILE, SUBTITLES_FILE, TRANSCRIPT_FILE] {
         println!("  {file}");
+    }
+    for file in [summary::MARKDOWN_FILE, summary::TEXT_FILE] {
+        if args.folder.join(file).exists() {
+            println!("  {file}");
+        }
     }
     Ok(())
 }

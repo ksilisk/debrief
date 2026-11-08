@@ -17,6 +17,7 @@ use crate::files::write_atomically;
 use crate::meeting::{Language, Meeting, MeetingError, Step, StepState, StepStatus};
 use crate::recording::Track;
 use crate::session::is_recording;
+use crate::summary::{self, SummarizeError, Summarizer, TooLong, WriteError};
 use crate::transcript::{TrackText, Transcript, TranscriptError};
 
 /// Each track's transcript waits here until both are merged.
@@ -88,6 +89,10 @@ pub enum Event {
         track: Track,
         done: f32,
     },
+    /// Characters of the summary received so far.
+    Summarizing {
+        characters: usize,
+    },
     Finished(Step),
 }
 
@@ -109,79 +114,173 @@ pub enum ProcessError {
     Export(#[from] ExportError),
     #[error("transcribing failed: {0}")]
     Transcribe(#[source] Box<dyn Error + Send + Sync>),
+    #[error("{} has no transcript yet; process it first", path.display())]
+    NotTranscribed { path: PathBuf },
+    #[error("summaries are on, but no summary provider is set up")]
+    NoSummaryProvider,
+    #[error(transparent)]
+    TooLong(#[from] TooLong),
+    #[error("writing the summary failed: {0}")]
+    Summarize(#[source] Box<dyn Error + Send + Sync>),
+    #[error(transparent)]
+    SummaryFile(#[from] WriteError),
 }
 
-/// Runs the steps that exist so far (transcribe, merge, export) and returns
-/// the updated meeting. Steps already done are skipped.
+/// Runs the steps that exist so far (transcribe, merge, export, summary) and
+/// returns the updated meeting. Steps already done are skipped; the summary
+/// step is skipped when summaries are off for the meeting.
 pub fn process(
     folder: &Path,
     transcriber: &mut dyn Transcriber,
+    mut summarizer: Option<&mut dyn Summarizer>,
     cancelled: &Arc<AtomicBool>,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<Meeting, ProcessError> {
+    let mut meeting = load_stopped(folder)?;
+    while let Some(step) = meeting.next_step() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(ProcessError::Cancelled);
+        }
+        match step {
+            Step::Transcribe => {
+                let model = transcriber.model().to_string();
+                run_step(
+                    &mut meeting,
+                    folder,
+                    step,
+                    Some(model),
+                    on_event,
+                    |meeting, on_event| {
+                        transcribe_tracks(folder, meeting, transcriber, cancelled, on_event)
+                    },
+                )?;
+            }
+            Step::Merge => run_step(&mut meeting, folder, step, None, on_event, |_, _| {
+                merge(folder)
+            })?,
+            Step::Export => run_step(&mut meeting, folder, step, None, on_event, |meeting, _| {
+                export_files(folder, meeting)
+            })?,
+            Step::Summary if !meeting.settings.summary => {
+                set_step(&mut meeting, folder, step, StepStatus::Skipped, None, None)?;
+            }
+            Step::Summary => match summarizer.as_deref_mut() {
+                Some(summarizer) => {
+                    summary_step(&mut meeting, folder, summarizer, cancelled, on_event)?
+                }
+                None => {
+                    let error = ProcessError::NoSummaryProvider;
+                    set_step(
+                        &mut meeting,
+                        folder,
+                        step,
+                        StepStatus::Failed,
+                        None,
+                        Some(error.to_string()),
+                    )?;
+                    return Err(error);
+                }
+            },
+            Step::Compress => break,
+        }
+    }
+    Ok(meeting)
+}
+
+/// Writes or rewrites the summary of a transcribed meeting, whether summaries
+/// were on for it or not.
+pub fn summarize_now(
+    folder: &Path,
+    summarizer: &mut dyn Summarizer,
+    cancelled: &Arc<AtomicBool>,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<Meeting, ProcessError> {
+    let mut meeting = load_stopped(folder)?;
+    if meeting.status(Step::Merge) != StepStatus::Done {
+        return Err(ProcessError::NotTranscribed {
+            path: folder.to_path_buf(),
+        });
+    }
+    summary_step(&mut meeting, folder, summarizer, cancelled, on_event)?;
+    Ok(meeting)
+}
+
+fn load_stopped(folder: &Path) -> Result<Meeting, ProcessError> {
     if is_recording(folder) {
         return Err(ProcessError::StillRecording {
             path: folder.to_path_buf(),
         });
     }
-    let mut meeting = Meeting::load(folder)?;
+    let meeting = Meeting::load(folder)?;
     if meeting.recording.stopped_at.is_none() {
         return Err(ProcessError::NeedsRepair {
             path: folder.to_path_buf(),
         });
     }
+    Ok(meeting)
+}
 
-    while let Some(step) = meeting.next_step() {
-        if !matches!(step, Step::Transcribe | Step::Merge | Step::Export) {
-            break;
-        }
-        if cancelled.load(Ordering::Relaxed) {
-            return Err(ProcessError::Cancelled);
-        }
-        let model = (step == Step::Transcribe).then(|| transcriber.model().to_string());
-        set_step(
-            &mut meeting,
-            folder,
-            step,
-            StepStatus::Running,
-            model.clone(),
-            None,
-        )?;
-        on_event(Event::Started(step));
+fn summary_step(
+    meeting: &mut Meeting,
+    folder: &Path,
+    summarizer: &mut dyn Summarizer,
+    cancelled: &Arc<AtomicBool>,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<(), ProcessError> {
+    let model = summarizer.model().to_string();
+    run_step(
+        meeting,
+        folder,
+        Step::Summary,
+        Some(model),
+        on_event,
+        |meeting, on_event| write_summary(folder, meeting, summarizer, cancelled, on_event),
+    )
+}
 
-        let result = match step {
-            Step::Transcribe => {
-                transcribe_tracks(folder, &meeting, transcriber, cancelled, on_event)
-            }
-            Step::Merge => merge(folder),
-            Step::Export => export_files(folder, &meeting),
-            Step::Summary | Step::Compress => break,
-        };
-        match result {
-            Ok(()) => {
-                set_step(&mut meeting, folder, step, StepStatus::Done, model, None)?;
-                on_event(Event::Finished(step));
-            }
-            Err(ProcessError::Cancelled) => {
-                meeting.steps.remove(&step);
-                meeting.save(folder)?;
-                return Err(ProcessError::Cancelled);
-            }
-            Err(error) => {
-                let message = error.to_string();
-                set_step(
-                    &mut meeting,
-                    folder,
-                    step,
-                    StepStatus::Failed,
-                    model,
-                    Some(message),
-                )?;
-                return Err(error);
-            }
+/// Saves the step as running, runs it, and saves how it ended. A cancelled step
+/// goes back to pending.
+fn run_step(
+    meeting: &mut Meeting,
+    folder: &Path,
+    step: Step,
+    model: Option<String>,
+    on_event: &mut dyn FnMut(Event),
+    run: impl FnOnce(&Meeting, &mut dyn FnMut(Event)) -> Result<(), ProcessError>,
+) -> Result<(), ProcessError> {
+    set_step(
+        meeting,
+        folder,
+        step,
+        StepStatus::Running,
+        model.clone(),
+        None,
+    )?;
+    on_event(Event::Started(step));
+    match run(meeting, on_event) {
+        Ok(()) => {
+            set_step(meeting, folder, step, StepStatus::Done, model, None)?;
+            on_event(Event::Finished(step));
+            Ok(())
+        }
+        Err(ProcessError::Cancelled) => {
+            meeting.steps.remove(&step);
+            meeting.save(folder)?;
+            Err(ProcessError::Cancelled)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            set_step(
+                meeting,
+                folder,
+                step,
+                StepStatus::Failed,
+                model,
+                Some(message),
+            )?;
+            Err(error)
         }
     }
-    Ok(meeting)
 }
 
 fn set_step(
@@ -305,6 +404,30 @@ fn merge(folder: &Path) -> Result<(), ProcessError> {
     Ok(())
 }
 
+fn write_summary(
+    folder: &Path,
+    meeting: &Meeting,
+    summarizer: &mut dyn Summarizer,
+    cancelled: &AtomicBool,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<(), ProcessError> {
+    let transcript = Transcript::load(folder)?;
+    let text = summary::input_text(meeting, &transcript);
+    summary::check_fits(summarizer, &text)?;
+    let summary = summarizer
+        .summarize(
+            &text,
+            &mut |characters| on_event(Event::Summarizing { characters }),
+            cancelled,
+        )
+        .map_err(|error| match error {
+            SummarizeError::Cancelled => ProcessError::Cancelled,
+            SummarizeError::Failed(error) => ProcessError::Summarize(error),
+        })?;
+    summary::write_files(folder, meeting, &transcript, &summary)?;
+    Ok(())
+}
+
 fn export_files(folder: &Path, meeting: &Meeting) -> Result<(), ProcessError> {
     let transcript = Transcript::load(folder)?;
     export(folder, meeting, &transcript)?;
@@ -401,7 +524,9 @@ mod tests {
     fn run(folder: &Path, fake: &mut Fake) -> (Result<Meeting, ProcessError>, Vec<Event>) {
         let mut events = Vec::new();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let result = process(folder, fake, &cancelled, &mut |event| events.push(event));
+        let result = process(folder, fake, None, &cancelled, &mut |event| {
+            events.push(event)
+        });
         (result, events)
     }
 
@@ -416,7 +541,8 @@ mod tests {
         assert_eq!(meeting.status(Step::Transcribe), StepStatus::Done);
         assert_eq!(meeting.status(Step::Merge), StepStatus::Done);
         assert_eq!(meeting.status(Step::Export), StepStatus::Done);
-        assert_eq!(meeting.next_step(), Some(Step::Summary));
+        assert_eq!(meeting.status(Step::Summary), StepStatus::Skipped);
+        assert_eq!(meeting.next_step(), Some(Step::Compress));
         for file in [MARKDOWN_FILE, TEXT_FILE, SUBTITLES_FILE] {
             assert!(folder.join(file).exists(), "{file}");
         }
@@ -525,5 +651,136 @@ mod tests {
         meeting.save(&folder).expect("save");
         let (result, _) = run(&folder, &mut Fake::default());
         assert!(matches!(result, Err(ProcessError::NeedsRepair { .. })));
+    }
+
+    struct Writer {
+        context: usize,
+        seen: Option<String>,
+    }
+
+    impl Summarizer for Writer {
+        fn model(&self) -> &str {
+            "writer"
+        }
+
+        fn prompt(&self) -> &str {
+            "Summarize."
+        }
+
+        fn context_tokens(&self) -> usize {
+            self.context
+        }
+
+        fn answer_tokens(&self) -> usize {
+            10
+        }
+
+        fn summarize(
+            &mut self,
+            transcript: &str,
+            on_text: &mut dyn FnMut(usize),
+            _: &AtomicBool,
+        ) -> Result<String, SummarizeError> {
+            self.seen = Some(transcript.to_string());
+            on_text(20);
+            Ok("## Summary\n\nAll **good**.".into())
+        }
+    }
+
+    fn writer() -> Writer {
+        Writer {
+            context: 100_000,
+            seen: None,
+        }
+    }
+
+    fn with_summaries(folder: &Path) {
+        let mut meeting = Meeting::load(folder).expect("load");
+        meeting.settings.summary = true;
+        meeting.save(folder).expect("save");
+    }
+
+    fn run_with(
+        folder: &Path,
+        summarizer: Option<&mut dyn Summarizer>,
+    ) -> (Result<Meeting, ProcessError>, Vec<Event>) {
+        let mut events = Vec::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let result = process(
+            folder,
+            &mut Fake::default(),
+            summarizer,
+            &cancelled,
+            &mut |event| events.push(event),
+        );
+        (result, events)
+    }
+
+    #[test]
+    fn writes_the_summary_when_summaries_are_on() {
+        let folder = recorded_meeting("process-summary");
+        with_summaries(&folder);
+        let mut writer = writer();
+        let (result, events) = run_with(&folder, Some(&mut writer));
+        let meeting = result.expect("process");
+        assert_eq!(meeting.status(Step::Summary), StepStatus::Done);
+        assert_eq!(
+            meeting.steps[&Step::Summary].model.as_deref(),
+            Some("writer")
+        );
+        assert!(events.contains(&Event::Summarizing { characters: 20 }));
+        let seen = writer.seen.expect("summarized");
+        assert!(seen.contains("16000 samples"));
+        assert!(!seen.contains("left out"));
+        let text = fs::read_to_string(folder.join(summary::TEXT_FILE)).expect("read");
+        assert!(text.starts_with("Sync\n"));
+        assert!(text.ends_with("Summary\n\nAll good.\n"));
+        assert!(folder.join(summary::MARKDOWN_FILE).exists());
+    }
+
+    #[test]
+    fn summaries_on_without_a_provider_fail_after_the_transcript_is_saved() {
+        let folder = recorded_meeting("process-summary-missing");
+        with_summaries(&folder);
+        let (result, _) = run_with(&folder, None);
+        assert!(matches!(result, Err(ProcessError::NoSummaryProvider)));
+        let meeting = Meeting::load(&folder).expect("load");
+        assert_eq!(meeting.status(Step::Export), StepStatus::Done);
+        assert_eq!(meeting.status(Step::Summary), StepStatus::Failed);
+        assert!(folder.join(MARKDOWN_FILE).exists());
+    }
+
+    #[test]
+    fn a_transcript_too_long_for_the_model_is_refused() {
+        let folder = recorded_meeting("process-summary-long");
+        with_summaries(&folder);
+        let mut writer = Writer {
+            context: 30,
+            seen: None,
+        };
+        let (result, _) = run_with(&folder, Some(&mut writer));
+        assert!(matches!(result, Err(ProcessError::TooLong(_))));
+        assert!(writer.seen.is_none());
+        assert!(!folder.join(summary::MARKDOWN_FILE).exists());
+    }
+
+    #[test]
+    fn a_summary_can_be_written_later() {
+        let folder = recorded_meeting("process-summary-later");
+        let (result, _) = run_with(&folder, None);
+        result.expect("process");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let meeting =
+            summarize_now(&folder, &mut writer(), &cancelled, &mut |_| {}).expect("summarize");
+        assert_eq!(meeting.status(Step::Summary), StepStatus::Done);
+        assert!(folder.join(summary::TEXT_FILE).exists());
+    }
+
+    #[test]
+    fn a_summary_needs_a_transcript_first() {
+        let folder = recorded_meeting("process-summary-early");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let result = summarize_now(&folder, &mut writer(), &cancelled, &mut |_| {});
+        assert!(matches!(result, Err(ProcessError::NotTranscribed { .. })));
     }
 }

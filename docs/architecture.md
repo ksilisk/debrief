@@ -18,8 +18,8 @@ Status: agreed plan, November 2026.
 | Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal), model large-v3-turbo | One pass per whole track. Silence detection, names hints and Auto per piece are measured in M0.3 first; `transcribe-rs` if Parakeet wins there |
 | Model files | `reqwest` (blocking, native TLS) + `sha2` | Downloaded into `~/Library/Application Support/io.github.ksilisk.debrief/models`, checked by size and SHA-256 |
 | Token counter | `tokenizers` + Whisper's tokenizer file | Exact count for “Names and terms” (limit: 224 tokens) |
-| Summaries | `reqwest` + serde, OpenAI chat completions with streaming | Providers: OpenAI-compatible server, OpenAI, Claude, OpenRouter |
-| API keys | `keyring` | macOS Keychain |
+| Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`); other providers later |
+| API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files |
 | Tauri plugins | global-shortcut, notification, dialog, opener, single-instance, log, clipboard-manager | Added with the features that need them; tray icon is built into Tauri |
 | macOS permissions | `objc2-*` crates | Microphone and Screen & System Audio Recording checks; the app's Info.plist needs `NSAudioCaptureUsageDescription` for the process tap |
 | CLI | `clap` | `debrief sources / record / process / summarize` |
@@ -36,6 +36,7 @@ debrief/
 │   ├── core/           meeting model, pipeline, merge, export, summaries
 │   ├── capture/        capture interface + macOS module
 │   ├── transcribe/     Whisper and its model files
+│   ├── summarize/      OpenAI and Anthropic clients, settings and the API key file
 │   └── cli/            the `debrief` command
 ├── app/
 │   ├── src-tauri/      Tauri shell: window, menu bar icon, hotkey, settings, permissions
@@ -56,7 +57,7 @@ debrief/
 1. **Transcribe** each track: converted to 16 kHz mono in memory, then one Whisper pass over the whole track in the meeting's language. Each track's result is kept in `.work/`, so a resume redoes only an unfinished track.
 2. **Merge** both tracks by time into `transcript.json`, marking echo lines: a Me line that overlaps Them lines within a second and shares at least 60% of its three-letter chunks with them, so the microphone heard the speakers. Lines under 8 letters are never marked.
 3. **Export** `transcript.md`, `transcript.txt`, `transcript.srt`: lines that aren't echo, in time order, with marked moments and pauses where they happened, and a count of the echo lines left out. Each subtitle holds at most two lines of 42 characters; a longer line is split and its time shared by length.
-4. **Summary**, if summaries are on: `summary.md` and `summary.txt`; long transcripts are summarized in parts, then joined (M1.5).
+4. **Summary**, if summaries are on for the meeting (otherwise skipped): the transcript as plain text, without echo lines, goes to the chosen model with the user's prompt, and the answer is saved as `summary.md` and, without Markdown, `summary.txt`. Before sending, the size is estimated (characters ÷ 3, plus room for the answer); a transcript that doesn't fit the model's context is refused, not split. `debrief summarize` writes or rewrites a summary at any time.
 5. **Compress** the audio: not done yet; the tracks stay WAV for now.
 
 The language is set per meeting, Russian by default. Auto lets Whisper detect one language per track from its first 30 seconds; since Me and Them are separate tracks, a meeting where each side speaks its own language works, but a track that switches language midway does not (see M0.3).
@@ -85,7 +86,7 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 
 - `format`: 1. It changes only when an older Debrief would read a field wrong; new optional fields keep the number. Debrief refuses a meeting with a newer format. Until v0.1 ships, format 1 may still change.
 - `recording`: `started_at`, `stopped_at` (empty while recording or after a crash), `duration_seconds`, `error`.
-- `settings`: `language` (`ru`, `en` or `auto`; `ru` by default).
+- `settings`: `language` (`ru`, `en` or `auto`; `ru` by default) and `summary` (whether to write one).
 - `tracks.me`, `tracks.them`: file name, source (the microphone, or the app or apps), recorder diagnostics.
 - `video`: file, source, frame rate, size, and `parts` (file and start position) while they aren't joined yet.
 - `marks`: marked moments, in seconds from the start of the audio.
@@ -93,6 +94,17 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 - `steps`: the status of each processing step (`transcribe`, `merge`, `export`, `summary`, `compress`): `pending`, `running`, `done`, `skipped` or `failed`, with start and finish times, an error if it failed, and the `model` it used. Processing resumes at the first step that isn't done or skipped.
 
 `transcript.json` (format 1) holds `segments`, sorted by time. Each has `start` and `end` (seconds in the recorded audio, the same timeline as the marks), `speaker` (`me` or `them`), `language`, `text` and `echo`. Echo lines stay in the file; the exports and the summary leave them out.
+
+## App settings
+
+The app's own files live in `~/Library/Application Support/io.github.ksilisk.debrief/`, never in Documents (which macOS may sync to iCloud):
+
+- `settings.json`: the summary provider, model, model context, answer limit and whether new recordings write a summary.
+- `summary-prompt.txt`: the instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language.
+- `keys.json`: API keys by provider, created with mode 600 so only the owner can read it.
+- `models/`: the Whisper model.
+
+`debrief config summaries` asks for the provider and the key (hidden input), checks the key by listing the provider's models, and saves the choice; the app's Settings screen will write the same files.
 
 ## Main risks
 

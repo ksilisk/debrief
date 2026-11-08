@@ -1,16 +1,15 @@
 //! `debrief`: record and process meetings from the terminal.
 
 mod analyze;
+mod config;
 mod format;
 mod model;
 mod process;
 mod record;
 mod repair;
 mod sources;
+mod summarize;
 
-use std::path::PathBuf;
-
-use anyhow::bail;
 use clap::{Parser, Subcommand};
 
 /// Record meetings and turn them into transcripts and summaries.
@@ -31,11 +30,10 @@ enum Command {
     Process(process::Args),
     /// Show or download the Whisper model.
     Model(model::Args),
-    /// Write a summary for a processed meeting folder (M1.5).
-    Summarize {
-        /// Meeting folder to summarize.
-        folder: PathBuf,
-    },
+    /// Write or rewrite the summary of a transcribed meeting.
+    Summarize(summarize::Args),
+    /// Show the settings, or set up summaries.
+    Config(config::Args),
     /// Measure sync and echo between me.wav and them.wav (M0.2 test).
     #[command(hide = true)]
     Analyze(analyze::Args),
@@ -51,18 +49,9 @@ fn main() -> anyhow::Result<()> {
         Command::Record(args) => record::run(args),
         Command::Process(args) => process::run(args),
         Command::Model(args) => model::run(args),
-        Command::Summarize { folder } => {
-            not_yet(&format!("summarize {}", folder.display()), "M1.5")
-        }
+        Command::Summarize(args) => summarize::run(args),
+        Command::Config(args) => config::run(args),
         Command::Analyze(args) => analyze::run(args),
         Command::Repair(args) => repair::run(args),
     }
-}
-
-fn not_yet(command: &str, milestone: &str) -> anyhow::Result<()> {
-    bail!(
-        "`debrief {command}` is not implemented yet (planned in {milestone}, {} {})",
-        debrief_core::APP_NAME,
-        debrief_core::VERSION
-    )
 }

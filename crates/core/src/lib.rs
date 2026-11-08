@@ -9,9 +9,13 @@ pub mod process;
 pub mod recording;
 pub mod repair;
 pub mod session;
+pub mod summary;
 pub mod transcript;
 
 pub const APP_NAME: &str = "Debrief";
+
+/// Names the app's folder in `~/Library/Application Support`.
+pub const APP_ID: &str = "io.github.ksilisk.debrief";
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
