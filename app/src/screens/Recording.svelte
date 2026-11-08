@@ -139,7 +139,7 @@
       Mark moment <kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd>
     </button>
     <button type="button" class="btn danger" disabled={stopping} onclick={() => run(stopRecording)}>
-      {stopping ? "Saving…" : "Stop recording"}
+      {stopping ? "Saving…" : "Stop and process"}
     </button>
   </div>
 </div>

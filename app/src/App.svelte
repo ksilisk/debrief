@@ -3,28 +3,74 @@
   import { listen } from "@tauri-apps/api/event";
   import { screenTitles, type Screen } from "./lib/screens";
   import { clock, currentRecording, events, type Live, type LiveStatus, type Saved } from "./lib/recording";
+  import {
+    dayLabel,
+    duration,
+    listMeetings,
+    meetingEvents,
+    processingProgress,
+    statusLabels,
+    timeOfDay,
+    type Finished,
+    type MeetingItem,
+    type Progress,
+  } from "./lib/meetings";
   import NewRecording from "./screens/NewRecording.svelte";
   import Recording from "./screens/Recording.svelte";
+  import Meeting from "./screens/Meeting.svelte";
 
   let screen = $state<Screen>("new");
   let live = $state<Live | null>(null);
   let status = $state<LiveStatus | null>(null);
   let stopping = $state(false);
-  let saved = $state<Saved | null>(null);
   let error = $state<string | null>(null);
+  let meetings = $state<MeetingItem[]>([]);
+  let selected = $state<string | null>(null);
+  let progress = $state<Progress | null>(null);
+  /** Goes up whenever meetings change, so an open meeting loads again. */
+  let version = $state(0);
+  /** What went wrong while saving a recording, by meeting folder. */
+  let saveProblems = $state<Record<string, string[]>>({});
 
   /** New recording and Recording share one place: a running recording decides which one shows. */
   const shown = $derived<Screen>(screen === "new" || screen === "recording" ? (live ? "recording" : "new") : screen);
+
+  /** The list without the live recording, which has its own item, grouped by day. */
+  const groups = $derived.by(() => {
+    const result: { label: string; items: MeetingItem[] }[] = [];
+    for (const item of meetings) {
+      if (item.status === "recording") continue;
+      const label = dayLabel(item.startedAt);
+      const group = result.at(-1);
+      if (group?.label === label) group.items.push(item);
+      else result.push({ label, items: [item] });
+    }
+    return result;
+  });
+
+  function openMeeting(folder: string) {
+    selected = folder;
+    screen = "meeting";
+  }
+
+  async function refresh() {
+    try {
+      meetings = await listMeetings();
+    } catch {
+      // Opened in a plain browser (npm run dev) instead of the Tauri window.
+    }
+    version += 1;
+  }
 
   onMount(() => {
     const stops = [
       // The menu bar icon and the global shortcut ask for a screen through this event.
       listen<Screen>("navigate", (event) => (screen = event.payload)),
+      listen<string>(meetingEvents.open, (event) => openMeeting(event.payload)),
       listen<Live>(events.started, (event) => {
         live = event.payload;
         status = null;
         stopping = false;
-        saved = null;
         error = null;
         screen = "recording";
       }),
@@ -34,12 +80,22 @@
         live = null;
         status = null;
         stopping = false;
-        saved = event.payload;
-        screen = "new";
+        if (event.payload.problems.length > 0) saveProblems[event.payload.folder] = event.payload.problems;
+        openMeeting(event.payload.folder);
       }),
       listen<string>(events.failed, (event) => {
         error = event.payload;
         screen = "new";
+      }),
+      listen(meetingEvents.changed, () => void refresh()),
+      listen<Progress>(meetingEvents.progress, (event) => {
+        const stepChanged = JSON.stringify(event.payload.steps) !== JSON.stringify(progress?.steps);
+        progress = event.payload;
+        if (stepChanged) version += 1;
+      }),
+      listen<Finished>(meetingEvents.finished, () => {
+        progress = null;
+        void refresh();
       }),
     ].map((listening) => listening.catch(() => undefined));
 
@@ -47,9 +103,11 @@
       .then((current) => {
         if (current) live = current;
       })
-      .catch(() => {
-        // Opened in a plain browser (npm run dev) instead of the Tauri window.
-      });
+      .catch(() => {});
+    processingProgress()
+      .then((current) => (progress = current))
+      .catch(() => {});
+    void refresh();
 
     return () => {
       for (const listening of stops) void listening.then((unlisten) => unlisten?.());
@@ -113,16 +171,47 @@
           <b>{live.title}</b>
           <span><i></i>{stopping ? "Saving" : status?.paused ? "Paused" : "Recording"} · {clock(status?.seconds ?? 0)}</span>
         </button>
-      {:else}
+      {/if}
+      {#each groups as group (group.label)}
+        <div class="group">{group.label}</div>
+        <ul class="mlist">
+          {#each group.items as item (item.folder)}
+            <li>
+              <button
+                type="button"
+                class="mitem"
+                aria-current={shown === "meeting" && selected === item.folder}
+                onclick={() => openMeeting(item.folder)}
+              >
+                <b>{item.title}</b>
+                <span>
+                  <span class="num">{timeOfDay(item.startedAt)} · {duration(item.durationSeconds)}</span>
+                  <span class="chip {item.status}">
+                    {item.status === "processing" && progress?.folder === item.folder ? `${progress.percent}%` : statusLabels[item.status]}
+                  </span>
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/each}
+      {#if !live && groups.length === 0}
         <p class="empty">No meetings yet.</p>
       {/if}
     </aside>
 
     <main class="pane">
       {#if shown === "new"}
-        <NewRecording {saved} bind:error />
+        <NewRecording bind:error />
       {:else if shown === "recording" && live}
         <Recording {live} {status} {stopping} />
+      {:else if shown === "meeting" && selected}
+        <Meeting
+          folder={selected}
+          progress={progress?.folder === selected ? progress : null}
+          {version}
+          problems={saveProblems[selected] ?? []}
+        />
       {:else}
         <h2>{screenTitles[shown]}</h2>
         <p class="sub">This screen is not built yet.</p>
@@ -192,6 +281,8 @@
     background: var(--side);
     border-right: 1px solid var(--line);
     overflow-y: auto;
+    /* The list loads after the window; it should not move what is in view. */
+    overflow-anchor: none;
   }
 
   .new-btn {
@@ -248,6 +339,93 @@
     height: 7px;
     border-radius: 50%;
     background: var(--rec);
+  }
+
+  .group {
+    padding: 12px 10px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .mlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .mitem {
+    width: 100%;
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mitem:hover {
+    background: var(--soft);
+  }
+
+  .mitem[aria-current="true"] {
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--line);
+  }
+
+  .mitem b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .mitem > span {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip {
+    padding: 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  .chip.ready {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+
+  .chip.processing {
+    color: var(--me);
+    border-color: color-mix(in srgb, var(--me) 40%, transparent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip.failed,
+  .chip.cutOff {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
   }
 
   .empty {

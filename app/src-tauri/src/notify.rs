@@ -4,7 +4,6 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 /// Tells the user that a meeting's files are ready, since processing often ends while they work elsewhere.
-#[expect(dead_code, reason = "processing (debrief-15) sends it")]
 pub fn meeting_ready(app: &AppHandle, meeting_title: &str) {
     let shown = app
         .notification()

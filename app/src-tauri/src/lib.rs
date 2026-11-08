@@ -3,8 +3,10 @@
 
 mod commands;
 mod hotkey;
+mod library;
 mod notify;
 mod phase;
+mod processing;
 mod recording;
 mod tray;
 mod window;
@@ -26,10 +28,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(hotkey::plugin(start_or_stop, mark))
         .manage(recording::Current::default())
+        .manage(processing::Queue::default())
         .menu(app_menu)
         .on_menu_event(|app, event| {
-            if let Some(action) = Action::from_id(event.id().as_ref()) {
+            let id = event.id().as_ref();
+            if let Some(action) = Action::from_id(id) {
                 on_action(app, action);
+            } else if let Some(folder) = id.strip_prefix(tray::MEETING_ID_PREFIX) {
+                window::open_meeting(app, folder);
             }
         })
         .on_window_event(|window, event| {
@@ -48,12 +54,21 @@ pub fn run() {
             commands::toggle_pause,
             commands::mark_moment,
             commands::stop_recording,
+            commands::meetings,
+            commands::meeting,
+            commands::process_meeting,
+            commands::write_summary,
+            commands::stop_processing,
+            commands::processing_progress,
             commands::show_in_finder,
+            commands::copy_text,
         ])
         .setup(|app| {
             let app = app.handle();
             tray::create(app)?;
             phase::set(app, Phase::Idle);
+            // Reading the meetings folder can wait on macOS's Documents permission prompt.
+            in_background(app, tray::refresh_recent);
             hotkey::register_start_or_stop(app);
             Ok(())
         })
@@ -116,7 +131,7 @@ fn on_action(app: &AppHandle, action: Action) {
 fn start_or_stop(app: &AppHandle) {
     in_background(app, |app| {
         if recording::is_active(app) {
-            recording::stop(app);
+            recording::stop(app, true);
         } else {
             recording::start_with_defaults(app);
         }

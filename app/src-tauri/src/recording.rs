@@ -2,6 +2,7 @@
 //! shortcut, its live status for the window and the menu bar, and stopping it.
 //! Everything here blocks, so callers run it off the main thread.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -15,8 +16,8 @@ use debrief_summarize::config::{self, RecordingSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::hotkey;
 use crate::phase::{self, Phase};
+use crate::{hotkey, processing, tray};
 
 /// How often the window gets the timer and the levels.
 const TICK: Duration = Duration::from_millis(100);
@@ -84,6 +85,7 @@ pub struct Choice<T> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Live {
+    pub folder: String,
     pub title: String,
     pub microphone: String,
     pub system_audio: String,
@@ -319,6 +321,7 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
         title => title.to_string(),
     };
     let live = Live {
+        folder: folder.display().to_string(),
         title: title.clone(),
         microphone: sources.microphone,
         system_audio: sources.system_audio,
@@ -341,6 +344,7 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
     );
     hotkey::register_mark(app);
     emit(app, STARTED, live);
+    emit(app, processing::MEETINGS_CHANGED, ());
     let app = app.clone();
     thread::spawn(move || watch(&app, id));
     Ok(())
@@ -372,7 +376,7 @@ fn watch(app: &AppHandle, id: u64) {
             );
         }
         if status.error.is_some() {
-            stop(app);
+            stop(app, true);
             return;
         }
     }
@@ -410,7 +414,7 @@ pub fn needs_saving(app: &AppHandle) -> bool {
 /// is under way.
 pub fn save_before_quit(app: &AppHandle) {
     while needs_saving(app) {
-        stop(app);
+        stop(app, false);
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -427,8 +431,9 @@ pub fn save_at_exit(app: &AppHandle) {
     }
 }
 
-/// Stops and saves the recording, if there is one.
-pub fn stop(app: &AppHandle) {
+/// Stops and saves the recording, if there is one, and then processes it when
+/// `then_process` is set.
+pub fn stop(app: &AppHandle, then_process: bool) {
     let state = app.state::<Current>();
     if state.busy.swap(true, Ordering::SeqCst) {
         return;
@@ -439,7 +444,12 @@ pub fn stop(app: &AppHandle) {
         emit(app, STOPPING, ());
         let saved = save(active);
         phase::set(app, Phase::Idle);
+        if then_process {
+            processing::process(app, Path::new(&saved.folder));
+        }
         emit(app, STOPPED, saved);
+        emit(app, processing::MEETINGS_CHANGED, ());
+        tray::refresh_recent(app);
     }
     state.busy.store(false, Ordering::SeqCst);
 }

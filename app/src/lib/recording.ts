@@ -38,6 +38,7 @@ export interface SourceList {
 }
 
 export interface Live {
+  folder: string;
   title: string;
   microphone: string;
   systemAudio: string;

@@ -915,6 +915,7 @@ dependencies = [
  "debrief-capture",
  "debrief-core",
  "debrief-summarize",
+ "debrief-transcribe",
  "serde",
  "tauri",
  "tauri-build",

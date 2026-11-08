@@ -5,15 +5,13 @@
   import {
     recordingDefaults,
     recordingSources,
-    showInFinder,
     startRecording,
     type Language,
-    type Saved,
     type SourceList,
     type VideoSource,
   } from "../lib/recording";
 
-  let { saved, error = $bindable() }: { saved: Saved | null; error: string | null } = $props();
+  let { error = $bindable() }: { error: string | null } = $props();
 
   let title = $state("");
   /** "" uses the system default. */
@@ -107,21 +105,6 @@
 </script>
 
 <div class="screen">
-  {#if saved}
-    <section class="notice" class:warn={saved.problems.length > 0} aria-live="polite">
-      <div class="notice-head">
-        <b>Saved “{saved.title}”</b>
-        <button type="button" class="btn small" onclick={() => showInFinder(saved.folder).catch((e) => (error = String(e)))}>
-          Show in Finder
-        </button>
-      </div>
-      {#each saved.problems as problem (problem)}
-        <p>{problem}</p>
-      {/each}
-      <p>Processing in the app comes next. Until then, run <code>debrief process "{saved.folder}"</code></p>
-    </section>
-  {/if}
-
   <label class="field-label" for="title">Meeting title</label>
   <input
     class="title-input"
@@ -276,40 +259,6 @@
 <style>
   .screen {
     max-width: 760px;
-  }
-
-  .notice {
-    display: grid;
-    gap: 6px;
-    margin-bottom: 24px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--ok) 40%, var(--line));
-    background: color-mix(in srgb, var(--ok) 7%, var(--surface));
-    font-size: 13px;
-  }
-
-  .notice.warn {
-    border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
-    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
-  }
-
-  .notice-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .notice p {
-    margin: 0;
-    color: var(--muted);
-  }
-
-  code {
-    font: 12px var(--font-mono);
-    color: var(--ink);
-    word-break: break-all;
   }
 
   .field-label {
@@ -556,29 +505,5 @@
     border-bottom-width: 2px;
     background: var(--surface);
     color: var(--ink);
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .btn:hover {
-    background: var(--soft);
-  }
-
-  .btn.small {
-    padding: 4px 10px;
-    font-size: 12px;
   }
 </style>

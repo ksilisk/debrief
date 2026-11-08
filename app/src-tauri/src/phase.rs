@@ -5,13 +5,6 @@ use tauri::AppHandle;
 use crate::tray;
 
 #[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "processing (debrief-15) starts the Processing phase"
-    )
-)]
 pub enum Phase {
     #[default]
     Idle,

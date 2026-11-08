@@ -16,6 +16,18 @@ pub enum Screen {
     Settings,
 }
 
+/// Tells the window to open a meeting. The payload is the meeting folder.
+const OPEN_MEETING: &str = "open-meeting";
+
+pub fn open_meeting(app: &AppHandle, folder: &str) {
+    show(app, None);
+    if let Some(window) = app.get_webview_window(MAIN)
+        && let Err(error) = window.emit(OPEN_MEETING, folder)
+    {
+        eprintln!("Could not open the meeting: {error}");
+    }
+}
+
 /// Brings the main window to the front, on `screen` when one is given.
 pub fn show(app: &AppHandle, screen: Option<Screen>) {
     let Some(window) = app.get_webview_window(MAIN) else {

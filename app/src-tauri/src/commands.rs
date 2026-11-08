@@ -1,11 +1,14 @@
-//! The commands the Svelte window calls. The slow ones run off the main thread.
+//! The commands the Svelte window calls. Anything that touches the meetings
+//! folder runs off the main thread: the first access can wait on macOS's
+//! Documents permission prompt.
 
-use std::path::Path;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
-use debrief_core::meeting;
 use tauri::AppHandle;
 
+use crate::library::{self, Details, Item};
+use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
 
 #[tauri::command]
@@ -41,32 +44,86 @@ pub async fn mark_moment(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle) -> Result<(), String> {
     blocking(move || {
-        recording::stop(&app);
+        recording::stop(&app, true);
         Ok(())
     })
     .await
 }
 
-/// Shows a meeting folder in Finder. Only folders inside the meetings folder.
+/// Newest first.
 #[tauri::command]
-pub fn show_in_finder(folder: String) -> Result<(), String> {
-    let library = meeting::default_library().ok_or("HOME is not set")?;
-    let library = library.canonicalize().unwrap_or(library);
-    let folder = Path::new(&folder)
-        .canonicalize()
-        .map_err(|error| format!("Could not find {folder}: {error}"))?;
-    if !folder.starts_with(&library) {
-        return Err(format!(
-            "{} is not in {}",
-            folder.display(),
-            library.display()
-        ));
+pub async fn meetings(app: AppHandle) -> Result<Vec<Item>, String> {
+    blocking(move || Ok(library::list(&|folder| processing::status_of(&app, folder)))).await
+}
+
+#[tauri::command]
+pub async fn meeting(app: AppHandle, folder: String) -> Result<Details, String> {
+    blocking(move || {
+        let folder = library::checked_folder(&folder)?;
+        library::details(&folder, &|folder| processing::status_of(&app, folder))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn process_meeting(app: AppHandle, folder: String) -> Result<(), String> {
+    blocking(move || {
+        processing::process(&app, &library::checked_folder(&folder)?);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn write_summary(app: AppHandle, folder: String) -> Result<(), String> {
+    blocking(move || {
+        processing::summarize(&app, &library::checked_folder(&folder)?);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn stop_processing(app: AppHandle, folder: String) -> Result<(), String> {
+    blocking(move || {
+        processing::stop(&app, &library::checked_folder(&folder)?);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn processing_progress(app: AppHandle) -> Option<Progress> {
+    processing::current(&app)
+}
+
+/// Shows a meeting folder in Finder.
+#[tauri::command]
+pub async fn show_in_finder(folder: String) -> Result<(), String> {
+    blocking(move || {
+        let folder = library::checked_folder(&folder)?;
+        Command::new("open")
+            .arg("-R")
+            .arg(&folder)
+            .status()
+            .map_err(|error| format!("Could not open Finder: {error}"))?;
+        Ok(())
+    })
+    .await
+}
+
+/// Puts text on the clipboard through `pbcopy`, which the web view can't always reach.
+#[tauri::command]
+pub fn copy_text(text: String) -> Result<(), String> {
+    let failed = |error: std::io::Error| format!("Could not copy: {error}");
+    let mut pbcopy = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(failed)?;
+    if let Some(mut stdin) = pbcopy.stdin.take() {
+        stdin.write_all(text.as_bytes()).map_err(failed)?;
     }
-    Command::new("open")
-        .arg("-R")
-        .arg(&folder)
-        .status()
-        .map_err(|error| format!("Could not open Finder: {error}"))?;
+    pbcopy.wait().map_err(failed)?;
     Ok(())
 }
 

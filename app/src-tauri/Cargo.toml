@@ -20,6 +20,7 @@ chrono.workspace = true
 debrief-capture.workspace = true
 debrief-core.workspace = true
 debrief-summarize.workspace = true
+debrief-transcribe.workspace = true
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-notification.workspace = true
 tauri-plugin-single-instance.workspace = true
