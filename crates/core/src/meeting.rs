@@ -136,7 +136,7 @@ pub struct AudioTracks {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioTrack {
-    /// Changes from the WAV file to m4a after processing.
+    /// The WAV file now; a compressed file may replace it later.
     pub file: String,
     /// The microphone, or the app or apps the system audio came from.
     pub source: String,

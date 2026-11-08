@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, bail};
+use debrief_core::export::{MARKDOWN_FILE, SUBTITLES_FILE, TEXT_FILE};
 use debrief_core::meeting::Step;
 use debrief_core::process::{Event, ProcessError, process};
 use debrief_core::recording::Track;
@@ -67,6 +68,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                 println!("Transcribing (Ctrl+C stops; run again to continue)")
             }
             Event::Started(Step::Merge) => println!("Merging Me and Them, marking echo lines"),
+            Event::Started(Step::Export) => println!("Writing the transcript files"),
             Event::Started(_) | Event::Finished(_) => {}
             Event::Transcribing { track, done } => {
                 if done == 0.0 {
@@ -134,6 +136,9 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         language(Track::Them),
         transcript.echo_lines()
     );
-    println!("  {}", args.folder.join(TRANSCRIPT_FILE).display());
+    println!("Saved to {}", args.folder.display());
+    for file in [MARKDOWN_FILE, TEXT_FILE, SUBTITLES_FILE, TRANSCRIPT_FILE] {
+        println!("  {file}");
+    }
     Ok(())
 }

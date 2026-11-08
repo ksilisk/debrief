@@ -12,6 +12,7 @@ use std::time::Duration;
 use chrono::Local;
 
 use crate::audio::{AudioError, WHISPER_RATE, read_for_whisper};
+use crate::export::{ExportError, export};
 use crate::files::write_atomically;
 use crate::meeting::{Language, Meeting, MeetingError, Step, StepState, StepStatus};
 use crate::recording::Track;
@@ -104,12 +105,14 @@ pub enum ProcessError {
     Audio(#[from] AudioError),
     #[error(transparent)]
     Transcript(#[from] TranscriptError),
+    #[error(transparent)]
+    Export(#[from] ExportError),
     #[error("transcribing failed: {0}")]
     Transcribe(#[source] Box<dyn Error + Send + Sync>),
 }
 
-/// Runs the steps that exist so far (transcribe and merge) and returns the
-/// updated meeting. Steps already done are skipped.
+/// Runs the steps that exist so far (transcribe, merge, export) and returns
+/// the updated meeting. Steps already done are skipped.
 pub fn process(
     folder: &Path,
     transcriber: &mut dyn Transcriber,
@@ -129,7 +132,7 @@ pub fn process(
     }
 
     while let Some(step) = meeting.next_step() {
-        if !matches!(step, Step::Transcribe | Step::Merge) {
+        if !matches!(step, Step::Transcribe | Step::Merge | Step::Export) {
             break;
         }
         if cancelled.load(Ordering::Relaxed) {
@@ -146,10 +149,13 @@ pub fn process(
         )?;
         on_event(Event::Started(step));
 
-        let result = if step == Step::Transcribe {
-            transcribe_tracks(folder, &meeting, transcriber, cancelled, on_event)
-        } else {
-            merge(folder)
+        let result = match step {
+            Step::Transcribe => {
+                transcribe_tracks(folder, &meeting, transcriber, cancelled, on_event)
+            }
+            Step::Merge => merge(folder),
+            Step::Export => export_files(folder, &meeting),
+            Step::Summary | Step::Compress => break,
         };
         match result {
             Ok(()) => {
@@ -299,6 +305,12 @@ fn merge(folder: &Path) -> Result<(), ProcessError> {
     Ok(())
 }
 
+fn export_files(folder: &Path, meeting: &Meeting) -> Result<(), ProcessError> {
+    let transcript = Transcript::load(folder)?;
+    export(folder, meeting, &transcript)?;
+    Ok(())
+}
+
 fn read_track_text(path: &Path) -> Result<TrackText, TranscriptError> {
     let text = fs::read_to_string(path).map_err(|source| TranscriptError::Read {
         path: path.to_path_buf(),
@@ -325,6 +337,7 @@ fn write_track_text(path: &Path, text: &TrackText) -> Result<(), TranscriptError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export::{MARKDOWN_FILE, SUBTITLES_FILE, TEXT_FILE};
     use crate::meeting::Settings;
     use crate::recording::{SAMPLE_RATE, TrackWriter};
     use crate::testing::temp_folder;
@@ -402,7 +415,11 @@ mod tests {
         assert_eq!(fake.calls, 2);
         assert_eq!(meeting.status(Step::Transcribe), StepStatus::Done);
         assert_eq!(meeting.status(Step::Merge), StepStatus::Done);
-        assert_eq!(meeting.next_step(), Some(Step::Export));
+        assert_eq!(meeting.status(Step::Export), StepStatus::Done);
+        assert_eq!(meeting.next_step(), Some(Step::Summary));
+        for file in [MARKDOWN_FILE, TEXT_FILE, SUBTITLES_FILE] {
+            assert!(folder.join(file).exists(), "{file}");
+        }
         let state = &meeting.steps[&Step::Transcribe];
         assert_eq!(state.model.as_deref(), Some("fake"));
         assert!(state.started_at.is_some() && state.finished_at.is_some());
@@ -413,7 +430,7 @@ mod tests {
         assert_eq!(transcript.segments[0].language, "ru");
         assert!(!folder.join(WORK_FOLDER).exists());
         assert!(events.contains(&Event::Started(Step::Transcribe)));
-        assert_eq!(events.last(), Some(&Event::Finished(Step::Merge)));
+        assert_eq!(events.last(), Some(&Event::Finished(Step::Export)));
         assert_eq!(Meeting::load(&folder).expect("load"), meeting);
     }
 

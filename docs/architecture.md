@@ -13,7 +13,7 @@ Status: agreed plan, November 2026.
 | One-app audio | Core Audio process tap through `objc2-core-audio` | Also hears the app's helper processes, which ScreenCaptureKit's app filter misses (Chrome plays sound from those); same clock as ScreenCaptureKit |
 | Video after pauses | AVFoundation through `objc2-av-foundation` | Joins the video parts into one file without re-encoding |
 | Windows / Linux capture | `cpal` plus WASAPI / PipeWire modules | Later (v0.3), same interface |
-| Audio files | `hound` writes WAV while recording; macOS `afconvert` makes m4a afterwards | WAV survives a crash best |
+| Audio files | `hound` writes WAV while recording | WAV survives a crash best. Compression (m4a or other) and sizes are decided later |
 | Resampling | `rubato` → 16 kHz mono for Whisper | |
 | Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal), model large-v3-turbo | One pass per whole track. Silence detection, names hints and Auto per piece are measured in M0.3 first; `transcribe-rs` if Parakeet wins there |
 | Model files | `reqwest` (blocking, native TLS) + `sha2` | Downloaded into `~/Library/Application Support/io.github.ksilisk.debrief/models`, checked by size and SHA-256 |
@@ -55,9 +55,9 @@ debrief/
 
 1. **Transcribe** each track: converted to 16 kHz mono in memory, then one Whisper pass over the whole track in the meeting's language. Each track's result is kept in `.work/`, so a resume redoes only an unfinished track.
 2. **Merge** both tracks by time into `transcript.json`, marking echo lines: a Me line that overlaps Them lines within a second and shares at least 60% of its three-letter chunks with them, so the microphone heard the speakers. Lines under 8 letters are never marked.
-3. **Export** `transcript.md`, `transcript.txt`, `transcript.srt` (M1.4).
+3. **Export** `transcript.md`, `transcript.txt`, `transcript.srt`: lines that aren't echo, in time order, with marked moments and pauses where they happened, and a count of the echo lines left out. Each subtitle holds at most two lines of 42 characters; a longer line is split and its time shared by length.
 4. **Summary**, if summaries are on: `summary.md` and `summary.txt`; long transcripts are summarized in parts, then joined (M1.5).
-5. **Compress** the audio to m4a (M1.4).
+5. **Compress** the audio: not done yet; the tracks stay WAV for now.
 
 The language is set per meeting, Russian by default. Auto lets Whisper detect one language per track from its first 30 seconds; since Me and Them are separate tracks, a meeting where each side speaks its own language works, but a track that switches language midway does not (see M0.3).
 
@@ -71,12 +71,12 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 2026-11-04 14-30 Product sync/
 ├── meeting.json     title, times, settings, tracks, marked moments, processing steps
 ├── transcript.json  every line from both tracks, with times, speaker, language and echo flag
-├── me.wav           microphone; me.m4a after processing
-├── them.wav         system audio; them.m4a after processing
+├── me.wav           microphone
+├── them.wav         system audio
 ├── screen.mp4       only when video is on; screen-1.mp4, screen-2.mp4, … until joined
-├── transcript.md    Me and Them with timecodes
-├── transcript.txt
-├── transcript.srt
+├── transcript.md    Me and Them with timecodes, marks and pauses
+├── transcript.txt   the same as plain text
+├── transcript.srt   subtitles for screen.mp4 (or the audio)
 ├── summary.md       only when summaries are on
 └── summary.txt
 ```
