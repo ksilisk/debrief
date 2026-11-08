@@ -9,15 +9,7 @@ pub fn size(bytes: u64) -> String {
     }
 }
 
-pub fn clock(seconds: f64) -> String {
-    let total = seconds.max(0.0) as u64;
-    format!(
-        "{:02}:{:02}:{:02}",
-        total / 3600,
-        total / 60 % 60,
-        total % 60
-    )
-}
+pub use debrief_core::export::clock;
 
 /// Accepts `90`, `90s`, `30m` or `1h`.
 pub fn parse_duration(text: &str) -> Result<Duration, String> {

@@ -276,7 +276,8 @@ fn speaker(track: Track) -> &'static str {
     }
 }
 
-fn clock(seconds: f64) -> String {
+/// Formats a position or duration as `HH:MM:SS`.
+pub fn clock(seconds: f64) -> String {
     let total = seconds.max(0.0) as u64;
     format!(
         "{:02}:{:02}:{:02}",

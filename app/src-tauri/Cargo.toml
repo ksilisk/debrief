@@ -15,5 +15,9 @@ name = "debrief_app"
 tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "2.12.5", features = [] }
+tauri = { version = "2.12.5", features = ["tray-icon"] }
 debrief-core.workspace = true
+tauri-plugin-global-shortcut.workspace = true
+tauri-plugin-notification.workspace = true
+tauri-plugin-single-instance.workspace = true
+serde.workspace = true
