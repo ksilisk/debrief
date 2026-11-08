@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/capture", "crates/cli", "app/src-tauri"]
+members = ["crates/core", "crates/capture", "crates/transcribe", "crates/cli", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ repository = "https://github.com/ksilisk/debrief"
 # Internal crates
 debrief-core = { path = "crates/core" }
 debrief-capture = { path = "crates/capture" }
+debrief-transcribe = { path = "crates/transcribe" }
 
 # Shared external crates. Add new ones here and use `name.workspace = true` in member crates.
 anyhow = "1.0.104"
@@ -60,6 +61,10 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 ] }
 # Pinned exactly: this crate releases breaking versions often.
 screencapturekit = { version = "=11.1.2", features = ["macos_15_0"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls"] }
+rubato = "5.0.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
+whisper-rs = "0.16.0"

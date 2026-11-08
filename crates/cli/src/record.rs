@@ -27,8 +27,9 @@ pub struct Args {
     /// Meeting title, also used in the folder name.
     #[arg(long, default_value = "")]
     title: String,
-    /// Language of the meeting for transcription: auto, ru or en.
-    #[arg(long, default_value = "auto")]
+    /// Language of the meeting for transcription: ru, en, or auto (one language per
+    /// track, detected from its first 30 seconds).
+    #[arg(long, default_value = "ru")]
     language: Language,
     /// Folder for the recording. Default: a new folder in ~/Documents/Debrief named
     /// after the date, time and title.

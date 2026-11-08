@@ -2,6 +2,8 @@
 
 mod analyze;
 mod format;
+mod model;
+mod process;
 mod record;
 mod repair;
 mod sources;
@@ -25,11 +27,10 @@ enum Command {
     Sources,
     /// Record the microphone and system audio as separate tracks, with optional screen video.
     Record(record::Args),
-    /// Transcribe a recorded meeting folder (M1).
-    Process {
-        /// Meeting folder to process.
-        folder: PathBuf,
-    },
+    /// Transcribe a recorded meeting: both tracks, merged by time, echo lines marked.
+    Process(process::Args),
+    /// Show or download the Whisper model.
+    Model(model::Args),
     /// Write a summary for a processed meeting folder (M1.5).
     Summarize {
         /// Meeting folder to summarize.
@@ -48,7 +49,8 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Sources => sources::run(),
         Command::Record(args) => record::run(args),
-        Command::Process { folder } => not_yet(&format!("process {}", folder.display()), "M1"),
+        Command::Process(args) => process::run(args),
+        Command::Model(args) => model::run(args),
         Command::Summarize { folder } => {
             not_yet(&format!("summarize {}", folder.display()), "M1.5")
         }

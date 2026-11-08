@@ -19,5 +19,6 @@ clap.workspace = true
 ctrlc.workspace = true
 debrief-capture.workspace = true
 debrief-core.workspace = true
+debrief-transcribe.workspace = true
 serde.workspace = true
 serde_json.workspace = true

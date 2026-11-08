@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use debrief_core::meeting::{self, MEETING_FILE};
 use debrief_core::repair::repair;
@@ -12,22 +12,25 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
-    let Some(mut repaired) = repair(&args.folder)? else {
+    if !repair_if_needed(&args.folder)? {
         println!(
             "Nothing to repair: the recording in {} is complete.",
             args.folder.display()
         );
-        return Ok(());
+    }
+    Ok(())
+}
+
+/// Returns whether the recording needed a repair.
+pub fn repair_if_needed(folder: &Path) -> anyhow::Result<bool> {
+    let Some(mut repaired) = repair(folder)? else {
+        return Ok(false);
     };
-    let video = meeting::finish_video(
-        &args.folder,
-        &mut repaired.meeting,
-        debrief_capture::join_videos,
-    );
-    repaired.meeting.save(&args.folder)?;
+    let video = meeting::finish_video(folder, &mut repaired.meeting, debrief_capture::join_videos);
+    repaired.meeting.save(folder)?;
 
     let meeting = &repaired.meeting;
-    println!("Repaired {}", args.folder.display());
+    println!("Repaired {}", folder.display());
     println!(
         "  audio        {}",
         clock(meeting.recording.duration_seconds)
@@ -50,5 +53,5 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     if let Err(error) = video {
         println!("{error}");
     }
-    Ok(())
+    Ok(true)
 }

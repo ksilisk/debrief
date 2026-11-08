@@ -5,21 +5,21 @@
 //! Until v0.1 ships, format 1 may still change freely.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
+use crate::files::write_atomically;
 use crate::recording::{Track, TrackStats};
 
 pub const FORMAT: u64 = 1;
 pub const MEETING_FILE: &str = "meeting.json";
 pub const VIDEO_FILE: &str = "screen.mp4";
 
-const TEMP_FILE: &str = ".meeting.json.tmp";
 const JOINED_TEMP_FILE: &str = ".screen-joined.mp4";
 /// Keeps the folder name well under the 255-byte limit, even with the date and a " (2)".
 const MAX_TITLE_BYTES: usize = 120;
@@ -90,13 +90,25 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
-    #[default]
+    /// Whisper detects one language per track from its first 30 seconds.
     #[serde(rename = "auto")]
     Auto,
+    #[default]
     #[serde(rename = "ru")]
     Russian,
     #[serde(rename = "en")]
     English,
+}
+
+impl Language {
+    /// The code Whisper uses.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::Auto => "auto",
+            Language::Russian => "ru",
+            Language::English => "en",
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -185,8 +197,7 @@ pub struct Pause {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
-    /// Both tracks as 16 kHz mono for Whisper.
-    Convert,
+    /// Each track on its own, converted to 16 kHz in memory.
     Transcribe,
     /// Merge Me and Them by time and find echo lines.
     Merge,
@@ -198,8 +209,7 @@ pub enum Step {
 }
 
 impl Step {
-    pub const ALL: [Step; 6] = [
-        Step::Convert,
+    pub const ALL: [Step; 5] = [
         Step::Transcribe,
         Step::Merge,
         Step::Export,
@@ -217,6 +227,9 @@ pub struct StepState {
     pub finished_at: Option<DateTime<FixedOffset>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The model the step used, such as `large-v3-turbo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,20 +291,15 @@ impl Meeting {
         serde_json::from_value(value).map_err(invalid)
     }
 
-    /// Writes a temporary file and renames it, so a crash never leaves half a file.
     pub fn save(&self, folder: &Path) -> Result<(), MeetingError> {
         let path = folder.join(MEETING_FILE);
-        let temp = folder.join(TEMP_FILE);
         let write_error = |source| MeetingError::Write {
             path: path.clone(),
             source,
         };
         let mut json = serde_json::to_vec_pretty(self).map_err(|e| write_error(e.into()))?;
         json.push(b'\n');
-        let mut file = File::create(&temp).map_err(write_error)?;
-        file.write_all(&json).map_err(write_error)?;
-        file.sync_all().map_err(write_error)?;
-        fs::rename(&temp, &path).map_err(write_error)
+        write_atomically(&path, &json).map_err(write_error)
     }
 
     pub fn status(&self, step: Step) -> StepStatus {
@@ -484,14 +492,15 @@ mod tests {
         let folder = temp_folder("meeting-roundtrip");
         let mut meeting = sample();
         meeting.steps.insert(
-            Step::Convert,
+            Step::Transcribe,
             StepState {
                 status: StepStatus::Done,
+                model: Some("large-v3-turbo".into()),
                 ..StepState::default()
             },
         );
         meeting.save(&folder).expect("save");
-        assert!(!folder.join(TEMP_FILE).exists());
+        assert!(!folder.join(".meeting.json.tmp").exists());
         assert_eq!(Meeting::load(&folder).expect("load"), meeting);
     }
 
@@ -516,8 +525,8 @@ mod tests {
           "video": { "file": "screen.mp4", "source": "Display 1", "fps": 5, "bytes": 157000000 },
           "marks": [{ "at_seconds": 870.0 }],
           "steps": {
-            "convert": { "status": "done", "finished_at": "2026-11-04T15:17:20+03:00" },
-            "transcribe": { "status": "running" }
+            "transcribe": { "status": "done", "finished_at": "2026-11-04T15:17:20+03:00" },
+            "merge": { "status": "running" }
           },
           "added_later": true
         }"#;
@@ -526,8 +535,8 @@ mod tests {
         assert_eq!(meeting.settings.language, Language::Russian);
         assert_eq!(meeting.tracks.them.file, "them.m4a");
         assert_eq!(meeting.marks, vec![Mark { at_seconds: 870.0 }]);
-        assert_eq!(meeting.status(Step::Convert), StepStatus::Done);
-        assert_eq!(meeting.next_step(), Some(Step::Transcribe));
+        assert_eq!(meeting.status(Step::Transcribe), StepStatus::Done);
+        assert_eq!(meeting.next_step(), Some(Step::Merge));
     }
 
     #[test]
@@ -548,9 +557,8 @@ mod tests {
     #[test]
     fn processing_resumes_at_the_first_unfinished_step() {
         let mut meeting = sample();
-        assert_eq!(meeting.next_step(), Some(Step::Convert));
+        assert_eq!(meeting.next_step(), Some(Step::Transcribe));
         for (step, status) in [
-            (Step::Convert, StepStatus::Done),
             (Step::Transcribe, StepStatus::Done),
             (Step::Merge, StepStatus::Running),
         ] {
@@ -583,13 +591,13 @@ mod tests {
     #[test]
     fn steps_are_saved_in_processing_order() {
         let mut meeting = sample();
-        for step in [Step::Compress, Step::Convert] {
+        for step in [Step::Compress, Step::Transcribe] {
             meeting.steps.insert(step, StepState::default());
         }
         let json = serde_json::to_string(&meeting).expect("serialize");
-        let convert = json.find("\"convert\"").expect("convert");
+        let transcribe = json.find("\"transcribe\"").expect("transcribe");
         let compress = json.find("\"compress\"").expect("compress");
-        assert!(convert < compress);
+        assert!(transcribe < compress);
     }
 
     fn with_parts(folder: &Path, count: usize) -> Meeting {

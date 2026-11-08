@@ -1,10 +1,14 @@
 //! Debrief core: everything that happens to a meeting, without UI or platform code.
 
 pub mod analysis;
+pub mod audio;
+mod files;
 pub mod meeting;
+pub mod process;
 pub mod recording;
 pub mod repair;
 pub mod session;
+pub mod transcript;
 
 pub const APP_NAME: &str = "Debrief";
 

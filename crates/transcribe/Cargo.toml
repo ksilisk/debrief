@@ -1,0 +1,21 @@
+[package]
+name = "debrief-transcribe"
+description = "Speech to text for Debrief: Whisper and its model files."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+debrief-core.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { workspace = true, features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs.workspace = true
