@@ -261,8 +261,7 @@ pub fn start(app: &AppHandle, choices: Choices) -> Result<(), String> {
 fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), String> {
     remember(&choices);
     let pressed_at = Local::now().fixed_offset();
-    let library =
-        meeting::default_library().ok_or("HOME is not set, so there is no Documents folder.")?;
+    let library = config::library().map_err(|error| error.to_string())?;
     let folder =
         meeting::create_folder(&library, &meeting::folder_name(&pressed_at, &choices.title))
             .map_err(|error| error.to_string())?;

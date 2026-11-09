@@ -1,48 +1,93 @@
-use std::ffi::c_void;
+use std::ffi::{CStr, CString, c_int, c_void};
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use debrief_core::meeting::Language;
 use debrief_core::process::{Progress, TranscribeError, Transcriber};
 use debrief_core::transcript::{Line, TrackText};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::whisper_rs_sys as sys;
+
+use crate::hints;
 
 const MAX_THREADS: usize = 8;
+const BEST_OF: c_int = 5;
 
 #[derive(Debug, thiserror::Error)]
-#[error("could not load the Whisper model {}: {source}", path.display())]
+#[error("could not load the Whisper model {}", path.display())]
 pub struct LoadError {
     path: PathBuf,
-    #[source]
-    source: whisper_rs::WhisperError,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RunError {
+    #[error("there is no audio to transcribe")]
+    NoAudio,
+    #[error("Whisper could not set up its working memory")]
+    NoState,
+    #[error("Whisper stopped with error {0}")]
+    Failed(c_int),
 }
 
 /// Whisper on the GPU (Metal on macOS). The model stays loaded for both tracks.
+///
+/// It calls whisper.cpp's C API directly because whisper-rs has no setter for
+/// `carry_initial_prompt`, which keeps the names and terms in front of every
+/// 30-second window instead of only the first few.
 pub struct Whisper {
-    context: WhisperContext,
+    context: NonNull<sys::whisper_context>,
     model: String,
-    threads: i32,
+    threads: c_int,
+    prompt: Option<CString>,
 }
+
+// SAFETY: a whisper.cpp context can move to another thread; `&mut self` keeps
+// it to one thread at a time.
+unsafe impl Send for Whisper {}
 
 impl Whisper {
     pub fn load(path: &Path, model: &str) -> Result<Self, LoadError> {
+        let failed = || LoadError {
+            path: path.to_path_buf(),
+        };
         // whisper.cpp logs to stderr by default; this sends its logs nowhere.
         whisper_rs::install_logging_hooks();
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu(true).flash_attn(true);
-        let context =
-            WhisperContext::new_with_params(path, params).map_err(|source| LoadError {
-                path: path.to_path_buf(),
-                source,
-            })?;
+        let c_path = path
+            .to_str()
+            .and_then(|path| CString::new(path).ok())
+            .ok_or_else(failed)?;
+        let context = unsafe {
+            let mut params = sys::whisper_context_default_params();
+            params.use_gpu = true;
+            params.flash_attn = true;
+            sys::whisper_init_from_file_with_params_no_state(c_path.as_ptr(), params)
+        };
+        let context = NonNull::new(context).ok_or_else(failed)?;
         let threads =
-            std::thread::available_parallelism().map_or(4, |n| n.get().min(MAX_THREADS)) as i32;
+            std::thread::available_parallelism().map_or(4, |n| n.get().min(MAX_THREADS)) as c_int;
         Ok(Self {
             context,
             model: model.to_string(),
             threads,
+            prompt: None,
         })
+    }
+
+    /// Names and terms from Settings, used from the next track on. Empty clears them.
+    pub fn set_hints(&mut self, hints: &str) {
+        let prompt = hints::prompt(hints).replace('\0', "");
+        self.prompt = if prompt.is_empty() {
+            None
+        } else {
+            CString::new(prompt).ok()
+        };
+    }
+}
+
+impl Drop for Whisper {
+    fn drop(&mut self) {
+        unsafe { sys::whisper_free(self.context.as_ptr()) }
     }
 }
 
@@ -57,59 +102,148 @@ impl Transcriber for Whisper {
         language: Language,
         progress: &Progress,
     ) -> Result<TrackText, TranscribeError> {
-        let failed = |error: whisper_rs::WhisperError| TranscribeError::Failed(Box::new(error));
-        let mut state = self.context.create_state().map_err(failed)?;
-
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 5 });
-        params.set_language(Some(language.code()));
-        params.set_n_threads(self.threads);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_special(false);
-        params.set_print_timestamps(false);
-        let reporter = progress.clone();
-        params.set_progress_callback_safe(move |percent: i32| {
-            reporter.set(percent as f32 / 100.0);
-        });
-        // whisper-rs 0.16's `set_abort_callback_safe` casts its boxed closure to the
-        // wrong type, so whisper.cpp aborts at once; this reads the flag directly.
-        let cancelled = progress.cancelled_flag();
-        unsafe {
-            params.set_abort_callback(Some(should_abort));
-            params.set_abort_callback_user_data(Arc::as_ptr(&cancelled) as *mut c_void);
+        let failed = |error: RunError| TranscribeError::Failed(Box::new(error));
+        if audio.is_empty() {
+            return Err(failed(RunError::NoAudio));
         }
+        let state = State::new(self.context).ok_or_else(|| failed(RunError::NoState))?;
 
-        let result = state.full(params, audio);
+        let mut params = unsafe {
+            sys::whisper_full_default_params(sys::whisper_sampling_strategy_WHISPER_SAMPLING_GREEDY)
+        };
+        params.greedy.best_of = BEST_OF;
+        params.language = language_code(language).as_ptr();
+        params.n_threads = self.threads;
+        params.print_progress = false;
+        params.print_realtime = false;
+        params.print_special = false;
+        params.print_timestamps = false;
+        if let Some(prompt) = &self.prompt {
+            params.initial_prompt = prompt.as_ptr();
+            params.carry_initial_prompt = true;
+        }
+        params.progress_callback = Some(on_progress);
+        params.progress_callback_user_data = progress as *const Progress as *mut c_void;
+        let cancelled = progress.cancelled_flag();
+        params.abort_callback = Some(should_abort);
+        params.abort_callback_user_data = Arc::as_ptr(&cancelled) as *mut c_void;
+
+        let code = unsafe {
+            sys::whisper_full_with_state(
+                self.context.as_ptr(),
+                state.0.as_ptr(),
+                params,
+                audio.as_ptr(),
+                audio.len() as c_int,
+            )
+        };
         drop(cancelled);
         if progress.is_cancelled() {
             return Err(TranscribeError::Cancelled);
         }
-        result.map_err(failed)?;
+        if code != 0 {
+            return Err(failed(RunError::Failed(code)));
+        }
+        Ok(state.text(language))
+    }
+}
 
-        let detected = whisper_rs::get_lang_str(state.full_lang_id_from_state())
-            .unwrap_or(language.code())
-            .to_string();
-        let lines = state
-            .as_iter()
-            .filter_map(|segment| {
-                let text = segment.to_str_lossy().ok()?.trim().to_string();
+/// One transcription's working memory, freed when dropped.
+struct State(NonNull<sys::whisper_state>);
+
+impl State {
+    fn new(context: NonNull<sys::whisper_context>) -> Option<Self> {
+        NonNull::new(unsafe { sys::whisper_init_state(context.as_ptr()) }).map(Self)
+    }
+
+    fn text(&self, language: Language) -> TrackText {
+        let state = self.0.as_ptr();
+        let detected = unsafe {
+            let code = sys::whisper_lang_str(sys::whisper_full_lang_id_from_state(state));
+            (!code.is_null()).then(|| CStr::from_ptr(code).to_string_lossy().into_owned())
+        };
+        let count = unsafe { sys::whisper_full_n_segments_from_state(state) };
+        let lines = (0..count)
+            .filter_map(|segment| unsafe {
+                let text = sys::whisper_full_get_segment_text_from_state(state, segment);
+                if text.is_null() {
+                    return None;
+                }
+                let text = CStr::from_ptr(text).to_string_lossy().trim().to_string();
                 (!text.is_empty()).then(|| Line {
-                    start: segment.start_timestamp() as f64 / 100.0,
-                    end: segment.end_timestamp() as f64 / 100.0,
+                    start: sys::whisper_full_get_segment_t0_from_state(state, segment) as f64
+                        / 100.0,
+                    end: sys::whisper_full_get_segment_t1_from_state(state, segment) as f64 / 100.0,
                     text,
                 })
             })
             .collect();
-        Ok(TrackText {
-            language: detected,
+        TrackText {
+            language: detected.unwrap_or_else(|| language.code().to_string()),
             lines,
-        })
+        }
     }
 }
 
+impl Drop for State {
+    fn drop(&mut self) {
+        unsafe { sys::whisper_free_state(self.0.as_ptr()) }
+    }
+}
+
+fn language_code(language: Language) -> &'static CStr {
+    match language {
+        Language::Auto => c"auto",
+        Language::Russian => c"ru",
+        Language::English => c"en",
+    }
+}
+
+/// SAFETY: `data` points to the `Progress` that `transcribe` borrows until
+/// `whisper_full_with_state` returns.
+unsafe extern "C" fn on_progress(
+    _context: *mut sys::whisper_context,
+    _state: *mut sys::whisper_state,
+    percent: c_int,
+    data: *mut c_void,
+) {
+    let progress = unsafe { &*(data as *const Progress) };
+    progress.set(percent as f32 / 100.0);
+}
+
 /// SAFETY: `data` points to the `AtomicBool` that `transcribe` keeps alive until
-/// `full` returns.
+/// `whisper_full_with_state` returns.
 unsafe extern "C" fn should_abort(data: *mut c_void) -> bool {
     let cancelled = unsafe { &*(data as *const AtomicBool) };
     cancelled.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hints::Vocab;
+    use crate::models::LARGE_V3_TURBO;
+
+    /// Run with `cargo test -p debrief-transcribe -- --ignored` after `debrief model download`.
+    #[test]
+    #[ignore = "needs the downloaded Whisper model"]
+    fn the_hint_count_matches_whisper_cpp() {
+        let path = LARGE_V3_TURBO.path().expect("model path");
+        let whisper = Whisper::load(&path, LARGE_V3_TURBO.name).expect("model");
+        let vocab = Vocab::load(&path).expect("vocab");
+        let samples = [
+            "Grafana, Kubernetes, Telemost, code freeze, onboarding",
+            "Алексей, Мария Иванова, ООО «Ромашка», Jira",
+            "don't we'll they're v2.0.1 — 42%  spaces   end  ",
+            "Ёлка, ёж; café naïve 東京 🙂",
+            "",
+        ];
+        for sample in samples {
+            let text = hints::prompt(sample);
+            let c_text = CString::new(text.clone()).expect("no null bytes");
+            let expected =
+                unsafe { sys::whisper_token_count(whisper.context.as_ptr(), c_text.as_ptr()) };
+            assert_eq!(vocab.count(&text), expected as usize, "{text:?}");
+        }
+    }
 }

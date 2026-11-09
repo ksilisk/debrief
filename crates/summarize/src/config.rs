@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use debrief_core::APP_ID;
-use debrief_core::meeting::Language;
+use debrief_core::meeting::{self, Language};
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -80,6 +80,14 @@ impl Provider {
             Provider::Anthropic => "anthropic",
         }
     }
+
+    /// Chosen first when nothing is chosen yet and the provider lists it.
+    pub fn suggested_model(self) -> &'static str {
+        match self {
+            Provider::Openai => "gpt-5-mini",
+            Provider::Anthropic => "claude-opus-5-5",
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -104,6 +112,18 @@ pub struct Settings {
     pub summary: SummarySettings,
     #[serde(default)]
     pub recording: RecordingSettings,
+    #[serde(default)]
+    pub transcription: TranscriptionSettings,
+    /// Where new meetings go; `None` uses `~/Documents/Debrief`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meetings_folder: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranscriptionSettings {
+    /// Names and terms as typed, one or more per line.
+    pub hints: String,
 }
 
 /// The app's last choices on the New recording screen, used for the next one.
@@ -172,6 +192,14 @@ impl Default for SummarySettings {
 }
 
 impl Settings {
+    /// The chosen meetings folder, or `~/Documents/Debrief`.
+    pub fn library(&self) -> Result<PathBuf, ConfigError> {
+        match &self.meetings_folder {
+            Some(folder) => Ok(folder.clone()),
+            None => meeting::default_library().ok_or(ConfigError::NoHome),
+        }
+    }
+
     /// A missing file gives the defaults.
     pub fn load(folder: &Path) -> Result<Self, ConfigError> {
         match read_optional(&folder.join(SETTINGS_FILE))? {
@@ -186,6 +214,11 @@ impl Settings {
         json.push(b'\n');
         write_file(&path, &json, None)
     }
+}
+
+/// Where new meetings go, from the saved settings.
+pub fn library() -> Result<PathBuf, ConfigError> {
+    Settings::load(&folder()?)?.library()
 }
 
 /// The user's summary instructions, created from [`DEFAULT_PROMPT`] the first time.
@@ -319,6 +352,8 @@ mod tests {
         settings.summary.model = "claude-opus-5-5".into();
         settings.recording.app = Some("us.zoom.xos".into());
         settings.recording.language = Language::Auto;
+        settings.transcription.hints = "Grafana, Telemost".into();
+        settings.meetings_folder = Some(PathBuf::from("/Volumes/Work/Meetings"));
         settings.save(&folder).expect("save");
         assert_eq!(Settings::load(&folder).expect("load"), settings);
     }
@@ -335,6 +370,8 @@ mod tests {
         let settings = Settings::load(&folder).expect("load");
         assert!(settings.summary.on_by_default);
         assert_eq!(settings.recording, RecordingSettings::default());
+        assert_eq!(settings.transcription, TranscriptionSettings::default());
+        assert_eq!(settings.library().ok(), meeting::default_library());
     }
 
     #[test]

@@ -18,6 +18,7 @@
   import NewRecording from "./screens/NewRecording.svelte";
   import Recording from "./screens/Recording.svelte";
   import Meeting from "./screens/Meeting.svelte";
+  import Settings from "./screens/Settings.svelte";
 
   let screen = $state<Screen>("new");
   let live = $state<Live | null>(null);
@@ -212,6 +213,8 @@
           {version}
           problems={saveProblems[selected] ?? []}
         />
+      {:else if shown === "settings"}
+        <Settings />
       {:else}
         <h2>{screenTitles[shown]}</h2>
         <p class="sub">This screen is not built yet.</p>

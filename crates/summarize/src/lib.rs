@@ -22,6 +22,49 @@ pub struct ModelInfo {
     pub answer_tokens: Option<usize>,
 }
 
+impl ModelInfo {
+    /// The answer limit for a summary: the model's own, up to [`config::DEFAULT_ANSWER_TOKENS`].
+    pub fn answer_limit(&self) -> usize {
+        self.answer_tokens
+            .map_or(config::DEFAULT_ANSWER_TOKENS, |limit| {
+                limit.min(config::DEFAULT_ANSWER_TOKENS)
+            })
+    }
+}
+
+/// OpenAI lists every model it has; these are not for chat.
+const NOT_CHAT: [&str; 10] = [
+    "audio",
+    "realtime",
+    "tts",
+    "transcribe",
+    "image",
+    "search",
+    "embedding",
+    "moderation",
+    "instruct",
+    "codex",
+];
+
+/// The models that can write a summary. Everything, if the filter leaves nothing.
+pub fn chat_models(provider: Provider, models: Vec<ModelInfo>) -> Vec<ModelInfo> {
+    if provider == Provider::Anthropic {
+        return models;
+    }
+    let chat: Vec<ModelInfo> = models
+        .iter()
+        .filter(|model| {
+            let id = model.id.as_str();
+            let family = id.starts_with("gpt-")
+                || id.starts_with("chatgpt")
+                || (id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit()));
+            family && !NOT_CHAT.iter().any(|word| id.contains(word))
+        })
+        .cloned()
+        .collect();
+    if chat.is_empty() { models } else { chat }
+}
+
 /// Also checks the key: a wrong key fails here.
 pub fn list_models(provider: Provider, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
     let client = http::client()?;

@@ -10,6 +10,7 @@ use tauri::AppHandle;
 use crate::library::{self, Details, Item};
 use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
+use crate::settings::{self, Changes, ModelChoice, ModelView, View};
 
 #[tauri::command]
 pub fn recording_defaults() -> Defaults {
@@ -125,6 +126,46 @@ pub fn copy_text(text: String) -> Result<(), String> {
     }
     pbcopy.wait().map_err(failed)?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn settings(app: AppHandle) -> Result<View, String> {
+    blocking(move || settings::view(&app)).await
+}
+
+#[tauri::command]
+pub async fn save_settings(changes: Changes) -> Result<(), String> {
+    blocking(move || settings::save(changes)).await
+}
+
+/// `None` until the Whisper model is downloaded.
+#[tauri::command]
+pub async fn count_hint_tokens(app: AppHandle, hints: String) -> Result<Option<usize>, String> {
+    blocking(move || Ok(settings::count_hints(&app, &hints))).await
+}
+
+/// The new folder, or `None` when the picker was cancelled.
+#[tauri::command]
+pub async fn choose_meetings_folder(app: AppHandle) -> Result<Option<String>, String> {
+    blocking(move || settings::choose_meetings_folder(&app)).await
+}
+
+#[tauri::command]
+pub async fn summary_models(
+    provider: debrief_summarize::config::Provider,
+    key: Option<String>,
+) -> Result<Vec<ModelView>, String> {
+    blocking(move || settings::summary_models(provider, key)).await
+}
+
+#[tauri::command]
+pub async fn use_summary_model(choice: ModelChoice) -> Result<(), String> {
+    blocking(move || settings::use_summary_model(choice)).await
+}
+
+#[tauri::command]
+pub async fn edit_summary_prompt() -> Result<(), String> {
+    blocking(settings::edit_summary_prompt).await
 }
 
 async fn blocking<T: Send + 'static>(

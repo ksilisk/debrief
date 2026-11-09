@@ -14,7 +14,7 @@ use debrief_core::process::{self, Event, ProcessError, Transcriber};
 use debrief_core::recording::Track;
 use debrief_core::repair::repair;
 use debrief_core::summary::Summarizer;
-use debrief_summarize::RemoteModel;
+use debrief_summarize::{RemoteModel, config};
 use debrief_transcribe::Whisper;
 use debrief_transcribe::models::LARGE_V3_TURBO;
 use serde::Serialize;
@@ -89,6 +89,11 @@ struct State {
 pub struct Queue {
     state: Mutex<State>,
     cancelled: Arc<AtomicBool>,
+}
+
+/// A meeting is being processed or waiting for it.
+pub fn is_busy(app: &AppHandle) -> bool {
+    lock(&app.state::<Queue>().state).worker
 }
 
 pub fn process(app: &AppHandle, folder: &Path) {
@@ -234,6 +239,7 @@ fn run(
                 Ok(transcriber) => transcriber,
                 Err(problem) => return finished(Some(problem), false),
             };
+            transcriber.set_hints(&hints());
             tracker.progress.transcribe_model = transcriber.model().to_string();
             process::process(
                 folder,
@@ -282,6 +288,14 @@ fn loaded(whisper: &mut Option<Whisper>) -> Result<&mut Whisper, String> {
     whisper
         .as_mut()
         .ok_or_else(|| "Whisper did not load".into())
+}
+
+/// Names and terms from Settings, read again for each meeting.
+fn hints() -> String {
+    config::folder()
+        .and_then(|folder| config::Settings::load(&folder))
+        .map(|settings| settings.transcription.hints)
+        .unwrap_or_default()
 }
 
 /// Like `debrief repair`: fixes a recording that was cut off before processing it.

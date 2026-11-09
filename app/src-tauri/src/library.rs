@@ -1,5 +1,6 @@
-//! The meetings in `~/Documents/Debrief`: the list for the sidebar and the menu
-//! bar, and one meeting's details for the Meeting screen.
+//! The meetings in the meetings folder (`~/Documents/Debrief` unless Settings
+//! says otherwise): the list for the sidebar and the menu bar, and one
+//! meeting's details for the Meeting screen.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use debrief_core::recording::Track;
 use debrief_core::session::is_recording;
 use debrief_core::summary;
 use debrief_core::transcript::{TRANSCRIPT_FILE, Transcript};
+use debrief_summarize::config;
 use serde::Serialize;
 
 /// Where a meeting stands, for the chips in the list.
@@ -100,7 +102,7 @@ const FILE_ORDER: [&str; 10] = [
 
 /// Newest first. `queued` tells which folders are being processed or waiting.
 pub fn list(queued: &dyn Fn(&Path) -> Option<Status>) -> Vec<Item> {
-    let Some(library) = meeting::default_library() else {
+    let Ok(library) = config::library() else {
         return Vec::new();
     };
     let Ok(entries) = fs::read_dir(&library) else {
@@ -246,7 +248,7 @@ fn files(folder: &Path) -> Vec<FileView> {
 
 /// A folder the window may ask about: inside the meetings folder, with a meeting in it.
 pub fn checked_folder(folder: &str) -> Result<PathBuf, String> {
-    let library = meeting::default_library().ok_or("HOME is not set")?;
+    let library = config::library().map_err(|error| error.to_string())?;
     let library = library.canonicalize().unwrap_or(library);
     let folder = Path::new(folder)
         .canonicalize()

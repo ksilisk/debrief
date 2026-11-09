@@ -11,7 +11,7 @@ use debrief_core::process::{Event, ProcessError, process};
 use debrief_core::recording::Track;
 use debrief_core::summary::{self, Summarizer};
 use debrief_core::transcript::{TRANSCRIPT_FILE, Transcript};
-use debrief_summarize::RemoteModel;
+use debrief_summarize::{RemoteModel, config};
 use debrief_transcribe::Whisper;
 use debrief_transcribe::models::LARGE_V3_TURBO;
 
@@ -25,6 +25,10 @@ pub struct Args {
     /// A Whisper model file. Default: the one `debrief model download` saves.
     #[arg(long)]
     model: Option<PathBuf>,
+    /// Names and terms Whisper should spell right, separated by commas.
+    /// Default: the ones from Settings.
+    #[arg(long)]
+    hints: Option<String>,
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -55,6 +59,15 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     };
     println!("Loading Whisper {name}");
     let mut whisper = Whisper::load(&path, &name)?;
+    let hints = match args.hints {
+        Some(hints) => hints,
+        None => {
+            config::Settings::load(&config::folder()?)?
+                .transcription
+                .hints
+        }
+    };
+    whisper.set_hints(&hints);
 
     let (mut summarizer, setup_problem) = match RemoteModel::from_settings() {
         Ok(model) => (model, None),

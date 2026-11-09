@@ -8,6 +8,7 @@ mod notify;
 mod phase;
 mod processing;
 mod recording;
+mod settings;
 mod tray;
 mod window;
 
@@ -26,9 +27,11 @@ pub fn run() {
             window::show(app, None);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(hotkey::plugin(start_or_stop, mark))
         .manage(recording::Current::default())
         .manage(processing::Queue::default())
+        .manage(settings::HintCounter::default())
         .menu(app_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -62,6 +65,13 @@ pub fn run() {
             commands::processing_progress,
             commands::show_in_finder,
             commands::copy_text,
+            commands::settings,
+            commands::save_settings,
+            commands::count_hint_tokens,
+            commands::choose_meetings_folder,
+            commands::summary_models,
+            commands::use_summary_model,
+            commands::edit_summary_prompt,
         ])
         .setup(|app| {
             let app = app.handle();

@@ -5,23 +5,7 @@ use debrief_summarize::config::{
     self, DEFAULT_ANSWER_TOKENS, DEFAULT_CONTEXT_TOKENS, KEYS_FILE, Keys, PROMPT_FILE, Provider,
     SETTINGS_FILE, Settings, SummarySettings, masked,
 };
-use debrief_summarize::{ModelInfo, list_models};
-
-/// Shown first for Anthropic when nothing is chosen yet.
-const SUGGESTED_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
-/// OpenAI lists every model it has; these are not for chat.
-const NOT_CHAT: [&str; 10] = [
-    "audio",
-    "realtime",
-    "tts",
-    "transcribe",
-    "image",
-    "search",
-    "embedding",
-    "moderation",
-    "instruct",
-    "codex",
-];
+use debrief_summarize::{chat_models, list_models};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -44,7 +28,15 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
 fn show() -> anyhow::Result<()> {
     let folder = config::folder()?;
-    let settings = Settings::load(&folder)?.summary;
+    let all = Settings::load(&folder)?;
+    println!("Recording");
+    println!("  meetings folder  {}", all.library()?.display());
+    let hints = all.transcription.hints.trim();
+    println!(
+        "  names and terms  {}",
+        if hints.is_empty() { "none" } else { hints }
+    );
+    let settings = all.summary;
     let keys = Keys::load(&folder)?;
     config::prompt(&folder)?;
     match settings.provider {
@@ -128,8 +120,8 @@ fn set_up_summaries() -> anyhow::Result<()> {
         (Some(previous), now) if previous == now && !current.model.is_empty() => {
             Some(current.model.clone())
         }
-        (_, Provider::Anthropic) if models.iter().any(|m| m.id == SUGGESTED_ANTHROPIC_MODEL) => {
-            Some(SUGGESTED_ANTHROPIC_MODEL.to_string())
+        (_, now) if models.iter().any(|m| m.id == now.suggested_model()) => {
+            Some(now.suggested_model().to_string())
         }
         _ => None,
     };
@@ -162,11 +154,7 @@ fn set_up_summaries() -> anyhow::Result<()> {
             }
         }
     };
-    let answer_tokens = info
-        .and_then(|m| m.answer_tokens)
-        .map_or(DEFAULT_ANSWER_TOKENS, |limit| {
-            limit.min(DEFAULT_ANSWER_TOKENS)
-        });
+    let answer_tokens = info.map_or(DEFAULT_ANSWER_TOKENS, |m| m.answer_limit());
 
     let default_on = if current.on_by_default { "y" } else { "n" };
     let on_by_default = ask(
@@ -197,24 +185,6 @@ fn set_up_summaries() -> anyhow::Result<()> {
         folder.join(PROMPT_FILE).display()
     );
     Ok(())
-}
-
-fn chat_models(provider: Provider, models: Vec<ModelInfo>) -> Vec<ModelInfo> {
-    if provider == Provider::Anthropic {
-        return models;
-    }
-    let chat: Vec<ModelInfo> = models
-        .iter()
-        .filter(|model| {
-            let id = model.id.as_str();
-            let family = id.starts_with("gpt-")
-                || id.starts_with("chatgpt")
-                || (id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit()));
-            family && !NOT_CHAT.iter().any(|word| id.contains(word))
-        })
-        .cloned()
-        .collect();
-    if chat.is_empty() { models } else { chat }
 }
 
 fn ask(question: &str, default: Option<&str>) -> io::Result<String> {

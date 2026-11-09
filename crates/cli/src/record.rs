@@ -301,5 +301,5 @@ fn fixes(stats: &TrackStats) -> u64 {
 }
 
 fn library_folder() -> anyhow::Result<PathBuf> {
-    meeting::default_library().context("HOME is not set; pass --out")
+    debrief_summarize::config::library().context("could not find the meetings folder; pass --out")
 }

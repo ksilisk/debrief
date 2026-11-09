@@ -9,7 +9,7 @@ A macOS-first desktop app that records meetings (microphone and system audio as 
 ```
 crates/core      meeting model, processing pipeline, export, summaries (no UI)
 crates/capture   capture interface + per-platform modules (macOS: ScreenCaptureKit)
-crates/transcribe  speech to text (Whisper) and model downloads
+crates/transcribe  speech to text (Whisper), names and terms, model downloads
 crates/summarize  summaries (OpenAI, Anthropic), settings and the API key file
 crates/cli       the `debrief` command-line tool
 app/src          Svelte 5 + TypeScript window
