@@ -115,7 +115,19 @@ macOS ties permissions (Microphone, Screen & System Audio Recording) to an app's
 - `APPLE_SIGNING_IDENTITY="<certificate name>" npm run tauri build` signs `Debrief.app` and the DMG. Without the variable the build is ad-hoc, which still runs, so the repo needs no certificate.
 - Signing turns on the hardened runtime, which blocks the microphone unless `Entitlements.plist` grants `com.apple.security.device.audio-input`.
 - Gatekeeper does not trust a self-signed certificate (`spctl` rejects it). Builds made on this Mac open normally because they are not quarantined; a downloaded copy needs “Open Anyway” once in Privacy & Security.
-- Sharing later: sign every release with the same certificate and update through Tauri's updater (its own signing key), so only the first install needs “Open Anyway” and permissions should stay. A paid Developer ID with notarization removes the warning; switching to it means granting permissions once more.
+- Releases and updates: see “Releasing”. A paid Developer ID with notarization would remove the first-launch warning; switching to it means granting permissions once more.
+
+## Releasing
+
+`.github/workflows/release.yml` runs when a tag like `v0.1.1` is pushed, on a GitHub macOS 15 runner (Apple silicon only). It refuses a tag that doesn't match `version` in the root `Cargo.toml`, imports the certificate into a keychain of its own, builds with `app/src-tauri/tauri.release.conf.json` (which turns on the updater files, so local builds don't need the updater key), signs everything, and creates a **draft** release with the DMG, `Debrief.app.tar.gz`, its `.sig` and `latest.json`. Nothing reaches installed copies until the draft is published.
+
+Repository secrets (Settings → Secrets and variables → Actions): `APPLE_CERTIFICATE` (the `.p12`, base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (the certificate's name), `TAURI_SIGNING_PRIVATE_KEY` (the content of `~/.tauri/debrief.key`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Every action in the workflow is pinned to a commit, since the job sees these secrets.
+
+To release: set `version` in `[workspace.package]` of the root `Cargo.toml`, build once so `Cargo.lock` follows, commit, push a `vX.Y.Z` tag, check the draft and publish it.
+
+In the app, `tauri-plugin-updater` reads `releases/latest/download/latest.json` ten seconds after launch and every 12 hours, and on Check for Updates… in the app menu (development builds don't check). It shows a new version in the sidebar and in Settings and installs only on a click, never during a recording or processing. It checks the download against the public key in `tauri.conf.json`, and `requireSignedVersion` rejects a release whose signed version isn't the one `latest.json` names, so an old signed release can't be passed off as new. After installing, Debrief quits and opens the new copy a second later; Tauri's own restart would start the new copy while the old one still runs, and the single-instance guard would close it.
+
+An update downloaded by the app isn't quarantined, so only the first install from a DMG needs “Open Anyway”, and permissions stay because every release is signed with the same certificate (tested on 2026-11-09 with a throwaway key and a local server: 0.1.0 updated itself to 0.1.1 and kept all permissions). If the updater key is lost, installed copies can't update any more and have to be reinstalled from a release made with a new key.
 
 ## Main risks
 

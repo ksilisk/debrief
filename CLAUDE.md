@@ -39,6 +39,8 @@ npm run tauri build      # build Debrief.app and a DMG (ad-hoc signed)
 APPLE_SIGNING_IDENTITY="<certificate name>" npm run tauri build   # signed: macOS keeps permissions between builds
 ```
 
+Releases: push a `vX.Y.Z` tag matching `Cargo.toml`; `.github/workflows/release.yml` drafts the release (details in `docs/architecture.md`, “Releasing”).
+
 ## Working rules
 
 - Before calling work done, run fmt, clippy (no warnings), tests and `npm run check`.

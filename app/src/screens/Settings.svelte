@@ -19,8 +19,9 @@
     type SettingsView,
   } from "../lib/settings";
   import { anyMissing, loadPermissions } from "../lib/permissions";
+  import { checkForUpdates, installUpdate, type UpdateStatus } from "../lib/updates";
 
-  let { onPermissions }: { onPermissions: () => void } = $props();
+  let { onPermissions, update }: { onPermissions: () => void; update: UpdateStatus | null } = $props();
 
   const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
   /** Names and terms are saved and counted once typing pauses this long, in milliseconds. */
@@ -33,6 +34,26 @@
   let summaryError = $state<string | null>(null);
   /** null until checked. */
   let permissionsMissing = $state<boolean | null>(null);
+  let updateError = $state<string | null>(null);
+
+  const updateText = $derived.by(() => {
+    switch (update?.state) {
+      case "checking":
+        return "Checking…";
+      case "upToDate":
+        return "Up to date";
+      case "available":
+        return `Version ${update.version} is ready`;
+      case "downloading":
+        return `Downloading the update · ${update.percent}%`;
+      case "installed":
+        return "Opening the new version…";
+      case "failed":
+        return update.message;
+      default:
+        return "Not checked yet";
+    }
+  });
 
   /** "5", "10" or "off". */
   let video = $state("5");
@@ -201,6 +222,24 @@
 
   function changeContext() {
     void save({ contextTokens }, (e) => (summaryError = e));
+  }
+
+  async function checkUpdates() {
+    updateError = null;
+    try {
+      await checkForUpdates();
+    } catch (e) {
+      updateError = String(e);
+    }
+  }
+
+  async function install() {
+    updateError = null;
+    try {
+      await installUpdate();
+    } catch (e) {
+      updateError = String(e);
+    }
   }
 
   async function editPrompt() {
@@ -433,6 +472,31 @@
     {#if summaryError}
       <p class="error" role="alert">{summaryError}</p>
     {/if}
+
+    <section class="group">
+      <h3>Updates</h3>
+      <div class="row">
+        <span class="k"
+          >Debrief {update?.current ?? ""}<InfoTip
+            label="Updates"
+            text="Debrief checks GitHub for a new version at launch and every 12 hours. It installs only when you click, never during a recording or processing."
+          /></span
+        >
+        <span class="v">
+          <span class="status" class:ok={update?.state === "upToDate"} class:warn={update?.state === "failed"}>{updateText}</span>
+          {#if update?.state === "available"}
+            <button type="button" class="btn small primary" onclick={install}>Install and restart</button>
+          {:else if update?.state !== "downloading" && update?.state !== "installed"}
+            <button type="button" class="btn small" onclick={checkUpdates} disabled={update?.state === "checking"}>
+              Check for updates
+            </button>
+          {/if}
+        </span>
+      </div>
+    </section>
+    {#if updateError}
+      <p class="error" role="alert">{updateError}</p>
+    {/if}
   {/if}
 </div>
 
@@ -633,6 +697,17 @@
   .btn:disabled {
     opacity: 0.55;
     cursor: default;
+  }
+
+  .btn.primary {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--surface);
+  }
+
+  .btn.primary:hover:not(:disabled) {
+    opacity: 0.9;
+    background: var(--ink);
   }
 
   .btn.small {

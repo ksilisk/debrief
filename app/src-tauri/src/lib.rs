@@ -9,8 +9,10 @@ mod permissions;
 mod phase;
 mod processing;
 mod recording;
+mod relaunch;
 mod settings;
 mod tray;
+mod updates;
 mod window;
 
 use tauri::menu::Menu;
@@ -29,10 +31,12 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(hotkey::plugin(start_or_stop, mark))
         .manage(recording::Current::default())
         .manage(processing::Queue::default())
         .manage(settings::HintCounter::default())
+        .manage(updates::Updates::default())
         .menu(app_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -78,6 +82,9 @@ pub fn run() {
             commands::meetings_folder_access,
             commands::open_privacy_settings,
             commands::relaunch,
+            commands::update_status,
+            commands::check_for_updates,
+            commands::install_update,
         ])
         .setup(|app| {
             let app = app.handle();
@@ -86,6 +93,7 @@ pub fn run() {
             // Reading the meetings folder can wait on macOS's Documents permission prompt.
             in_background(app, tray::refresh_recent);
             hotkey::register_start_or_stop(app);
+            updates::start(app);
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -118,6 +126,15 @@ fn app_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             MenuItem::with_id(app, Action::Settings.id(), "Settings…", true, Some("Cmd+,"))?;
         // Right after About and its separator, where macOS apps keep it.
         app_submenu.insert_items(&[&settings, &PredefinedMenuItem::separator(app)?], 2)?;
+        let check_updates = MenuItem::with_id(
+            app,
+            Action::CheckUpdates.id(),
+            "Check for Updates…",
+            true,
+            None::<&str>,
+        )?;
+        // Right after About, as in other macOS apps.
+        app_submenu.insert(&check_updates, 1)?;
         // The built-in Quit ends the app at once; this one saves a recording first.
         if let Some(last) = app_submenu.items()?.len().checked_sub(1) {
             app_submenu.remove_at(last)?;
@@ -139,6 +156,11 @@ fn on_action(app: &AppHandle, action: Action) {
         Action::Mark => mark(app),
         Action::OpenWindow => window::show(app, None),
         Action::Settings => window::show(app, Some(Screen::Settings)),
+        Action::CheckUpdates => {
+            window::show(app, Some(Screen::Settings));
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { updates::check(&app).await });
+        }
         Action::Quit => app.exit(0),
     }
 }

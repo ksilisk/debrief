@@ -25,4 +25,7 @@ tauri-plugin-dialog.workspace = true
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-notification.workspace = true
 tauri-plugin-single-instance.workspace = true
+tauri-plugin-updater.workspace = true
 serde.workspace = true
+# tauri::generate_context! uses it once tauri.conf.json has plugin settings.
+serde_json.workspace = true

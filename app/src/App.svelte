@@ -21,6 +21,7 @@
   import Settings from "./screens/Settings.svelte";
   import Permissions from "./screens/Permissions.svelte";
   import { anyMissing, isMissing, loadPermissions, meetingsFolderAccess } from "./lib/permissions";
+  import { installUpdate, updateEvent, updateStatus, type UpdateStatus } from "./lib/updates";
 
   let screen = $state<Screen>("new");
   let live = $state<Live | null>(null);
@@ -32,6 +33,10 @@
   let progress = $state<Progress | null>(null);
   /** Goes up whenever meetings change, so an open meeting loads again. */
   let version = $state(0);
+  let update = $state<UpdateStatus | null>(null);
+  let updateError = $state<string | null>(null);
+  /** An update can't be installed during a recording or processing. */
+  const updateBlocked = $derived(live !== null || progress !== null);
   /** What went wrong while saving a recording, by meeting folder. */
   let saveProblems = $state<Record<string, string[]>>({});
 
@@ -63,6 +68,15 @@
       // Opened in a plain browser (npm run dev) instead of the Tauri window.
     }
     version += 1;
+  }
+
+  async function install() {
+    updateError = null;
+    try {
+      await installUpdate();
+    } catch (e) {
+      updateError = String(e);
+    }
   }
 
   /** At launch, a missing permission opens the Permissions screen, unless something else is already showing. */
@@ -104,6 +118,7 @@
         screen = "new";
       }),
       listen(meetingEvents.changed, () => void refresh()),
+      listen<UpdateStatus>(updateEvent, (event) => (update = event.payload)),
       listen<Progress>(meetingEvents.progress, (event) => {
         const stepChanged = JSON.stringify(event.payload.steps) !== JSON.stringify(progress?.steps);
         progress = event.payload;
@@ -125,6 +140,9 @@
       .catch(() => {});
     void refresh();
     void checkPermissions();
+    updateStatus()
+      .then((current) => (update = current))
+      .catch(() => {});
 
     return () => {
       for (const listening of stops) void listening.then((unlisten) => unlisten?.());
@@ -215,6 +233,25 @@
       {#if !live && groups.length === 0}
         <p class="empty">No meetings yet.</p>
       {/if}
+      {#if update?.state === "available" || update?.state === "downloading" || update?.state === "installed"}
+        <div class="update-card" role="status">
+          {#if update.state === "available"}
+            <b>Debrief {update.version} is ready</b>
+            {#if updateBlocked}
+              <span>You can install it once the {live ? "recording" : "processing"} is done.</span>
+            {/if}
+            <button type="button" class="update-btn" onclick={install} disabled={updateBlocked}>Install and restart</button>
+          {:else if update.state === "downloading"}
+            <b>Downloading the update</b>
+            <span class="num">{update.percent}%</span>
+          {:else}
+            <b>Opening the new version…</b>
+          {/if}
+          {#if updateError}
+            <span class="update-error">{updateError}</span>
+          {/if}
+        </div>
+      {/if}
     </aside>
 
     <main class="pane">
@@ -230,7 +267,7 @@
           problems={saveProblems[selected] ?? []}
         />
       {:else if shown === "settings"}
-        <Settings onPermissions={() => (screen = "permissions")} />
+        <Settings onPermissions={() => (screen = "permissions")} {update} />
       {:else if shown === "permissions"}
         <Permissions onDone={() => (screen = "new")} />
       {:else}
@@ -453,6 +490,51 @@
     margin: 4px 10px;
     font-size: 12px;
     color: var(--muted);
+  }
+
+  .update-card {
+    position: sticky;
+    bottom: 0;
+    display: grid;
+    gap: 4px;
+    margin-top: auto;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    font-size: 12px;
+  }
+
+  .update-card b {
+    font-size: 13px;
+  }
+
+  .update-card span {
+    color: var(--muted);
+  }
+
+  .update-card .update-error {
+    color: var(--rec);
+  }
+
+  .update-btn {
+    justify-self: start;
+    margin-top: 4px;
+    padding: 4px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--surface);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .update-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .pane {

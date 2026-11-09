@@ -24,17 +24,19 @@ pub enum Action {
     Stop,
     OpenWindow,
     Settings,
+    CheckUpdates,
     Quit,
 }
 
 impl Action {
-    const ALL: [Action; 7] = [
+    const ALL: [Action; 8] = [
         Action::Start,
         Action::Pause,
         Action::Mark,
         Action::Stop,
         Action::OpenWindow,
         Action::Settings,
+        Action::CheckUpdates,
         Action::Quit,
     ];
 
@@ -46,6 +48,7 @@ impl Action {
             Action::Stop => "stop",
             Action::OpenWindow => "open-window",
             Action::Settings => "settings",
+            Action::CheckUpdates => "check-updates",
             Action::Quit => "quit",
         }
     }

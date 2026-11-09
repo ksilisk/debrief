@@ -1,5 +1,5 @@
-//! The Permissions screen: what macOS allows Debrief, the system prompts, the
-//! System Settings pages, and quitting and reopening so a new permission works.
+//! The Permissions screen: what macOS allows Debrief, the system prompts and
+//! the System Settings pages.
 
 use std::fs;
 use std::io;
@@ -8,10 +8,8 @@ use std::process::Command;
 use debrief_capture::{Access, Permission};
 use debrief_summarize::config;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 
 use crate::settings::with_tilde;
-use crate::{processing, recording};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,30 +123,5 @@ pub fn open_settings(kind: Kind) -> Result<(), String> {
         .arg(url)
         .status()
         .map_err(|error| format!("Could not open System Settings: {error}"))?;
-    Ok(())
-}
-
-/// Screen recording starts working only in a new process, so this quits and
-/// starts Debrief again from its app bundle.
-pub fn relaunch(app: &AppHandle) -> Result<(), String> {
-    if recording::is_active(app) {
-        return Err("Stop the recording before you quit and reopen Debrief.".into());
-    }
-    if processing::is_busy(app) {
-        return Err("Wait until processing finishes before you quit and reopen Debrief.".into());
-    }
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let bundle = exe
-        .ancestors()
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .ok_or("Debrief isn't running from Debrief.app, so open it again yourself.")?;
-    // The new copy waits until this one has quit; otherwise it would hand over and exit.
-    Command::new("/bin/sh")
-        .arg("-c")
-        .arg("sleep 1; /usr/bin/open \"$0\"")
-        .arg(bundle)
-        .spawn()
-        .map_err(|error| format!("Could not reopen Debrief: {error}"))?;
-    app.exit(0);
     Ok(())
 }

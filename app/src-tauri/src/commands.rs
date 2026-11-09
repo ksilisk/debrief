@@ -11,7 +11,9 @@ use crate::library::{self, Details, Item};
 use crate::permissions::{self, Folder, Kind, Status};
 use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
+use crate::relaunch;
 use crate::settings::{self, Changes, ModelChoice, ModelView, View};
+use crate::updates;
 
 #[tauri::command]
 pub fn recording_defaults() -> Defaults {
@@ -193,7 +195,24 @@ pub async fn open_privacy_settings(kind: Kind) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn relaunch(app: AppHandle) -> Result<(), String> {
-    blocking(move || permissions::relaunch(&app)).await
+    blocking(move || relaunch::relaunch(&app)).await
+}
+
+#[tauri::command]
+pub fn update_status(app: AppHandle) -> updates::Status {
+    updates::status(&app)
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) -> updates::Status {
+    updates::check(&app).await;
+    updates::status(&app)
+}
+
+/// Quits and opens the new version when it works.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    updates::install(&app).await
 }
 
 async fn blocking<T: Send + 'static>(
