@@ -10,8 +10,9 @@
     type SourceList,
     type VideoSource,
   } from "../lib/recording";
+  import { isMissing, loadPermissions, shortNames, type Permissions } from "../lib/permissions";
 
-  let { error = $bindable() }: { error: string | null } = $props();
+  let { error = $bindable(), onPermissions }: { error: string | null; onPermissions: () => void } = $props();
 
   let title = $state("");
   /** "" uses the system default. */
@@ -28,13 +29,46 @@
   let sources = $state<SourceList | null>(null);
   let loading = $state(false);
   let starting = $state(false);
+  let permissions = $state<Permissions | null>(null);
+
+  const permissionLine = $derived(
+    permissions === null
+      ? []
+      : (Object.keys(shortNames) as (keyof Permissions)[]).map((key) => {
+          const status = permissions![key];
+          return {
+            key,
+            dot: status === "allowed" ? "ok" : isMissing(status) ? "warn" : "off",
+            text: `${shortNames[key]} ${status === "allowed" ? "allowed" : isMissing(status) ? "not allowed" : "can't be checked"}`,
+          };
+        }),
+  );
+  /** For example "Microphone and System audio are not allowed." */
+  const missingText = $derived.by(() => {
+    const names = permissionLine.filter((item) => item.dot === "warn").map((item) => shortNames[item.key]);
+    if (names.length === 0) return null;
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    return `${list} ${names.length === 1 ? "is" : "are"} not allowed.`;
+  });
 
   /** A remembered app that is not running now still works: its sound is recorded once it starts. */
   const appNotRunning = $derived(app !== "" && sources !== null && !sources.apps.some((a) => a.id === app));
 
   onMount(() => {
     void load();
+    void checkPermissions();
+    const onFocus = () => void checkPermissions();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   });
+
+  async function checkPermissions() {
+    try {
+      permissions = await loadPermissions();
+    } catch {
+      // Opened in a plain browser (npm run dev) instead of the Tauri window.
+    }
+  }
 
   async function load() {
     try {
@@ -247,6 +281,14 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
+  {#if missingText}
+    <div class="perm-alert" role="alert">
+      <span class="dot warn"></span>
+      <span><b>{missingText}</b> A recording can fail or miss a track.</span>
+      <button type="button" class="btn" onclick={onPermissions}>Fix permissions</button>
+    </div>
+  {/if}
+
   <div class="rec-row">
     <button type="button" class="rec-btn" aria-label="Start recording" onclick={start} disabled={starting}><span></span></button>
     <div>
@@ -254,6 +296,14 @@
       <span class="hint">or press <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>R</kbd> from any app</span>
     </div>
   </div>
+
+  {#if permissionLine.length > 0}
+    <p class="perm">
+      {#each permissionLine as item (item.key)}
+        <span><span class="dot {item.dot}"></span>{item.text}</span>
+      {/each}
+    </p>
+  {/if}
 </div>
 
 <style>
@@ -441,6 +491,39 @@
     text-decoration: underline;
   }
 
+  .perm-alert {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 18px 0 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+    font-size: 13px;
+  }
+
+  .perm-alert .btn {
+    margin-left: auto;
+  }
+
+  .btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .btn:hover {
+    background: var(--soft);
+  }
+
   .error {
     margin: 18px 0 0;
     padding: 10px 12px;
@@ -495,6 +578,37 @@
   .hint {
     font-size: 12px;
     color: var(--muted);
+  }
+
+  .perm {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 22px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: 1px;
+  }
+
+  .dot.ok {
+    background: var(--ok);
+  }
+
+  .dot.warn {
+    background: var(--warn);
+  }
+
+  .dot.off {
+    background: var(--line);
   }
 
   kbd {

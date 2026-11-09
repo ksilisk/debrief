@@ -1,5 +1,5 @@
 /** The window's screens. The Rust side opens them by these names (`Screen` in window.rs). */
-export type Screen = "new" | "recording" | "processing" | "meeting" | "settings";
+export type Screen = "new" | "recording" | "processing" | "meeting" | "settings" | "permissions";
 
 export const screenTitles: Record<Screen, string> = {
   new: "New recording",
@@ -7,4 +7,5 @@ export const screenTitles: Record<Screen, string> = {
   processing: "Processing",
   meeting: "Meeting",
   settings: "Settings",
+  permissions: "Permissions",
 };

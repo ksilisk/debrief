@@ -19,6 +19,8 @@
   import Recording from "./screens/Recording.svelte";
   import Meeting from "./screens/Meeting.svelte";
   import Settings from "./screens/Settings.svelte";
+  import Permissions from "./screens/Permissions.svelte";
+  import { anyMissing, isMissing, loadPermissions, meetingsFolderAccess } from "./lib/permissions";
 
   let screen = $state<Screen>("new");
   let live = $state<Live | null>(null);
@@ -61,6 +63,19 @@
       // Opened in a plain browser (npm run dev) instead of the Tauri window.
     }
     version += 1;
+  }
+
+  /** At launch, a missing permission opens the Permissions screen, unless something else is already showing. */
+  async function checkPermissions() {
+    const showIfMissing = (missing: boolean) => {
+      if (missing && screen === "new" && !live) screen = "permissions";
+    };
+    try {
+      showIfMissing(anyMissing(await loadPermissions()));
+      showIfMissing(isMissing((await meetingsFolderAccess()).status));
+    } catch {
+      // Opened in a plain browser (npm run dev) instead of the Tauri window.
+    }
   }
 
   onMount(() => {
@@ -109,6 +124,7 @@
       .then((current) => (progress = current))
       .catch(() => {});
     void refresh();
+    void checkPermissions();
 
     return () => {
       for (const listening of stops) void listening.then((unlisten) => unlisten?.());
@@ -203,7 +219,7 @@
 
     <main class="pane">
       {#if shown === "new"}
-        <NewRecording bind:error />
+        <NewRecording bind:error onPermissions={() => (screen = "permissions")} />
       {:else if shown === "recording" && live}
         <Recording {live} {status} {stopping} />
       {:else if shown === "meeting" && selected}
@@ -214,7 +230,9 @@
           problems={saveProblems[selected] ?? []}
         />
       {:else if shown === "settings"}
-        <Settings />
+        <Settings onPermissions={() => (screen = "permissions")} />
+      {:else if shown === "permissions"}
+        <Permissions onDone={() => (screen = "new")} />
       {:else}
         <h2>{screenTitles[shown]}</h2>
         <p class="sub">This screen is not built yet.</p>

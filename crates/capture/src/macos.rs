@@ -3,6 +3,7 @@
 //! second ScreenCaptureKit stream.
 
 mod join;
+mod permissions;
 mod tap;
 
 use std::fs;
@@ -28,6 +29,7 @@ use crate::{
 use tap::Tap;
 
 pub use join::join_videos;
+pub use permissions::{access, request};
 
 const SAMPLE_RATE: i32 = 48_000;
 const VIDEO_FINISH_TIMEOUT: Duration = Duration::from_secs(10);

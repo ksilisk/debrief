@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use tauri::AppHandle;
 
 use crate::library::{self, Details, Item};
+use crate::permissions::{self, Folder, Kind, Status};
 use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
 use crate::settings::{self, Changes, ModelChoice, ModelView, View};
@@ -166,6 +167,33 @@ pub async fn use_summary_model(choice: ModelChoice) -> Result<(), String> {
 #[tauri::command]
 pub async fn edit_summary_prompt() -> Result<(), String> {
     blocking(settings::edit_summary_prompt).await
+}
+
+#[tauri::command]
+pub async fn permissions() -> Result<permissions::View, String> {
+    blocking(|| Ok(permissions::view())).await
+}
+
+/// Waits for the user to answer the system prompt.
+#[tauri::command]
+pub async fn request_permission(kind: Kind) -> Result<Status, String> {
+    blocking(move || Ok(permissions::request(kind))).await
+}
+
+/// Can wait for the answer to macOS's folder prompt.
+#[tauri::command]
+pub async fn meetings_folder_access() -> Result<Folder, String> {
+    blocking(|| Ok(permissions::folder())).await
+}
+
+#[tauri::command]
+pub async fn open_privacy_settings(kind: Kind) -> Result<(), String> {
+    blocking(move || permissions::open_settings(kind)).await
+}
+
+#[tauri::command]
+pub async fn relaunch(app: AppHandle) -> Result<(), String> {
+    blocking(move || permissions::relaunch(&app)).await
 }
 
 async fn blocking<T: Send + 'static>(

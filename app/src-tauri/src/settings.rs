@@ -279,7 +279,7 @@ fn update(change: impl FnOnce(&mut Settings)) -> Result<(), String> {
     settings.save(&folder).map_err(failed)
 }
 
-fn with_tilde(path: &Path) -> String {
+pub(crate) fn with_tilde(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home
         .as_deref()

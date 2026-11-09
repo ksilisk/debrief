@@ -5,6 +5,7 @@ mod commands;
 mod hotkey;
 mod library;
 mod notify;
+mod permissions;
 mod phase;
 mod processing;
 mod recording;
@@ -72,6 +73,11 @@ pub fn run() {
             commands::summary_models,
             commands::use_summary_model,
             commands::edit_summary_prompt,
+            commands::permissions,
+            commands::request_permission,
+            commands::meetings_folder_access,
+            commands::open_privacy_settings,
+            commands::relaunch,
         ])
         .setup(|app| {
             let app = app.handle();

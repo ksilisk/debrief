@@ -1,7 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{CaptureError, CaptureInfo, Handler, Options, Sources};
+use crate::{Access, CaptureError, CaptureInfo, Handler, Options, Permission, Sources};
+
+pub fn access(_permission: Permission) -> Access {
+    Access::Unknown
+}
+
+pub fn request(_permission: Permission) -> Access {
+    Access::Unknown
+}
 
 pub fn sources() -> Result<Sources, CaptureError> {
     Err(CaptureError::Unsupported)

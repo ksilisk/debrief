@@ -22,7 +22,7 @@ Status: agreed plan, November 2026.
 | API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files |
 | Tauri plugins | global-shortcut, notification, dialog, opener, single-instance, log, clipboard-manager | Added with the features that need them; tray icon is built into Tauri |
 | Signing | A self-signed code-signing certificate, hardened runtime, `Entitlements.plist` | macOS keeps permissions across builds signed with the same certificate; see “Building and signing” |
-| macOS permissions | `objc2-*` crates | Microphone and Screen & System Audio Recording checks; the app's Info.plist needs `NSAudioCaptureUsageDescription` for the process tap |
+| macOS permissions | AVFoundation, CoreGraphics, and the private TCC framework loaded at run time | Microphone, Screen & System Audio Recording, System Audio Recording (the process tap, which has no public check) and the meetings folder. The Permissions screen opens at launch when one is missing; screen recording needs Debrief to quit and reopen after it is turned on. The app's Info.plist needs `NSAudioCaptureUsageDescription` for the process tap |
 | CLI | `clap` | `debrief sources / record / process / summarize` |
 | Logging, errors | `tracing`, `thiserror`, `anyhow` | |
 

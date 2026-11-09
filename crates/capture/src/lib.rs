@@ -73,6 +73,37 @@ pub fn sources() -> Result<Sources, CaptureError> {
     platform::sources()
 }
 
+/// What the system must allow before a recording works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    /// The Me track.
+    Microphone,
+    /// The capture stream, which audio-only recordings need too.
+    ScreenRecording,
+    /// The Them track.
+    SystemAudio,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Allowed,
+    Denied,
+    /// [`request`] can show the system prompt.
+    NotAsked,
+    /// The system gives no answer.
+    Unknown,
+}
+
+pub fn access(permission: Permission) -> Access {
+    platform::access(permission)
+}
+
+/// Shows the system prompt when the user hasn't answered it yet, waits for the
+/// answer and returns the access after it. Blocks, so call it off the main thread.
+pub fn request(permission: Permission) -> Access {
+    platform::request(permission)
+}
+
 /// Joins video files into one without re-encoding. Each part is placed at its
 /// start in seconds; a gap before a part stays empty.
 pub fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), CaptureError> {

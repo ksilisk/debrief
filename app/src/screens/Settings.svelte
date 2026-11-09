@@ -18,6 +18,9 @@
     type Provider,
     type SettingsView,
   } from "../lib/settings";
+  import { anyMissing, loadPermissions } from "../lib/permissions";
+
+  let { onPermissions }: { onPermissions: () => void } = $props();
 
   const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
   /** Names and terms are saved and counted once typing pauses this long, in milliseconds. */
@@ -28,6 +31,8 @@
   let recordingError = $state<string | null>(null);
   let hintsError = $state<string | null>(null);
   let summaryError = $state<string | null>(null);
+  /** null until checked. */
+  let permissionsMissing = $state<boolean | null>(null);
 
   /** "5", "10" or "off". */
   let video = $state("5");
@@ -64,6 +69,9 @@
 
   onMount(() => {
     void load();
+    loadPermissions()
+      .then((permissions) => (permissionsMissing = anyMissing(permissions)))
+      .catch(() => {});
     return () => {
       if (hintTimer !== undefined) {
         clearTimeout(hintTimer);
@@ -233,6 +241,22 @@
           /></span
         >
         <span class="v"><kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>R</kbd></span>
+      </div>
+      <div class="row">
+        <span class="k"
+          >macOS permissions<InfoTip
+            label="macOS permissions"
+            text="What macOS allows Debrief: the microphone, screen and system audio recording, and the meetings folder."
+          /></span
+        >
+        <span class="v">
+          {#if permissionsMissing !== null}
+            <span class="status" class:warn={permissionsMissing}>
+              {permissionsMissing ? "Some are not allowed" : "All allowed"}
+            </span>
+          {/if}
+          <button type="button" class="btn small" onclick={onPermissions}>Review</button>
+        </span>
       </div>
       <div class="row">
         <label class="k" for="video">Screen video for new recordings</label>
@@ -485,6 +509,10 @@
 
   .status.ok {
     color: var(--ok);
+  }
+
+  .status.warn {
+    color: var(--warn);
   }
 
   .chip {
