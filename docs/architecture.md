@@ -21,6 +21,7 @@ Status: agreed plan, November 2026.
 | Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`); other providers later |
 | API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files |
 | Tauri plugins | global-shortcut, notification, dialog, opener, single-instance, log, clipboard-manager | Added with the features that need them; tray icon is built into Tauri |
+| Signing | A self-signed code-signing certificate, hardened runtime, `Entitlements.plist` | macOS keeps permissions across builds signed with the same certificate; see “Building and signing” |
 | macOS permissions | `objc2-*` crates | Microphone and Screen & System Audio Recording checks; the app's Info.plist needs `NSAudioCaptureUsageDescription` for the process tap |
 | CLI | `clap` | `debrief sources / record / process / summarize` |
 | Logging, errors | `tracing`, `thiserror`, `anyhow` | |
@@ -105,6 +106,16 @@ The app's own files live in `~/Library/Application Support/io.github.ksilisk.deb
 - `models/`: the Whisper model.
 
 `debrief config summaries` asks for the provider and the key (hidden input), checks the key by listing the provider's models, and saves the choice. The app's Settings screen writes the same files: a key is saved only after Test connection lists the models with it, and the provider and model only once a model is chosen. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs. `debrief process --hints` overrides the names and terms for one run.
+
+## Building and signing
+
+macOS ties permissions (Microphone, Screen & System Audio Recording) to an app's designated requirement. An ad-hoc signed build's requirement is its own hash, so every rebuild looks like a new app and loses them. A build signed with a certificate gets `identifier "io.github.ksilisk.debrief" and certificate leaf = H"…"`, which every later build signed with the same certificate meets, so permissions stay (checked 2026-11-09 with two builds whose code hashes differed).
+
+- The certificate is self-signed, made once in Keychain Access (Certificate Assistant → Create a Certificate…, Self Signed Root, Code Signing, a long validity). It does not have to be trusted for `codesign` to use it. Its private key is backed up as a password-protected `.p12` outside the repo; a new certificate means granting permissions once more.
+- `APPLE_SIGNING_IDENTITY="<certificate name>" npm run tauri build` signs `Debrief.app` and the DMG. Without the variable the build is ad-hoc, which still runs, so the repo needs no certificate.
+- Signing turns on the hardened runtime, which blocks the microphone unless `Entitlements.plist` grants `com.apple.security.device.audio-input`.
+- Gatekeeper does not trust a self-signed certificate (`spctl` rejects it). Builds made on this Mac open normally because they are not quarantined; a downloaded copy needs “Open Anyway” once in Privacy & Security.
+- Sharing later: sign every release with the same certificate and update through Tauri's updater (its own signing key), so only the first install needs “Open Anyway” and permissions should stay. A paid Developer ID with notarization removes the warning; switching to it means granting permissions once more.
 
 ## Main risks
 

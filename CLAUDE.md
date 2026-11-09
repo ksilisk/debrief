@@ -35,7 +35,8 @@ App (from `app/`):
 npm install
 npm run tauri dev        # run the app with hot reload
 npm run check            # Svelte and TypeScript type check
-npm run tauri build      # build Debrief.app and a DMG
+npm run tauri build      # build Debrief.app and a DMG (ad-hoc signed)
+APPLE_SIGNING_IDENTITY="<certificate name>" npm run tauri build   # signed: macOS keeps permissions between builds
 ```
 
 ## Working rules

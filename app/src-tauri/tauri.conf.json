@@ -38,7 +38,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "15.0"
+      "minimumSystemVersion": "15.0",
+      "entitlements": "Entitlements.plist"
     }
   }
 }
