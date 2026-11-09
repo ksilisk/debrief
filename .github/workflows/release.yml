@@ -82,4 +82,12 @@ jobs:
           releaseBody: |
             For Macs with Apple silicon and macOS 15 or later.
 
-            **Install:** open the `.dmg` and drag Debrief to Applications. Debrief is signed with its author's own certificate, not by Apple, so macOS blocks the first launch: open System Settings → Privacy & Security, click **Open Anyway** next to Debrief, and confirm. Later versions install from inside Debrief (Check for Updates…) without this step.
+            **Install.** Debrief is signed with its author's own certificate, not checked by Apple, so macOS stops it the first time:
+
+            1. Download the `.dmg` and open it. When macOS says it "could not verify" the file, click **Done** (not Move to Bin).
+            2. Open System Settings → Privacy & Security, scroll down to Security, click **Open Anyway** next to the file and confirm.
+            3. In the disk image, drag Debrief to Applications and open it. If macOS stops Debrief the same way, repeat step 2 for it.
+
+            Or skip these steps: in Terminal, run `xattr -d com.apple.quarantine ~/Downloads/Debrief_*.dmg` before you open the disk image.
+
+            Later versions install from inside Debrief (Check for Updates…) without these steps and keep the permissions you gave it.
