@@ -119,7 +119,7 @@ macOS ties permissions (Microphone, Screen & System Audio Recording) to an app's
 
 ## Releasing
 
-`.github/workflows/release.yml` runs when a tag like `v0.1.1` is pushed, on a GitHub macOS 15 runner (Apple silicon only). It refuses a tag that doesn't match `version` in the root `Cargo.toml`, imports the certificate into a keychain of its own, builds with `app/src-tauri/tauri.release.conf.json` (which turns on the updater files, so local builds don't need the updater key), signs everything, and creates a **draft** release with the DMG, `Debrief.app.tar.gz`, its `.sig` and `latest.json`. Nothing reaches installed copies until the draft is published.
+`.github/workflows/release.yml` runs when a tag like `v0.1.1` is pushed, on a GitHub macOS 26 runner (Apple silicon only; `screencapturekit` needs the Xcode 26 SDK). It refuses a tag that doesn't match `version` in the root `Cargo.toml`, imports the certificate into a keychain of its own, builds with `app/src-tauri/tauri.release.conf.json` (which turns on the updater files, so local builds don't need the updater key), signs everything, and creates a **draft** release with the DMG, `Debrief.app.tar.gz`, its `.sig` and `latest.json`. Nothing reaches installed copies until the draft is published.
 
 Repository secrets (Settings → Secrets and variables → Actions): `APPLE_CERTIFICATE` (the `.p12`, base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (the certificate's name), `TAURI_SIGNING_PRIVATE_KEY` (the content of `~/.tauri/debrief.key`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Every action in the workflow is pinned to a commit, since the job sees these secrets.
 

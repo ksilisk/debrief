@@ -12,10 +12,20 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    # screencapturekit's apple-metal needs the macOS 26 SDK (Xcode 26), which
+    # macos-15 runners don't use by default.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check that the runner is Apple silicon
+        run: |
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "::error::The runner is $(uname -m); releases are for Apple silicon only"
+            exit 1
+          fi
+          xcodebuild -version
 
       - name: Check that the tag matches the app version
         run: |
