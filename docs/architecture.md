@@ -86,7 +86,7 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 `meeting.json` is written when recording starts and saved again after each change, through a temporary file and a rename, so a crash never leaves half a file:
 
 - `format`: 1. It changes only when an older Debrief would read a field wrong; new optional fields keep the number. Debrief refuses a meeting with a newer format. Until v0.1 ships, format 1 may still change.
-- `recording`: `started_at`, `stopped_at` (empty while recording or after a crash), `duration_seconds`, `error`.
+- `recording`: `started_at`, `stopped_at` (empty while recording or after a crash), `duration_seconds`, `error`, and `files_deleted_at` once the storage cleanup has deleted the audio and video.
 - `settings`: `language` (`ru`, `en` or `auto`; `ru` by default) and `summary` (whether to write one).
 - `tracks.me`, `tracks.them`: file name, source (the microphone, or the app or apps), recorder diagnostics.
 - `video`: file, source, frame rate, size, and `parts` (file and start position) while they aren't joined yet.
@@ -96,11 +96,17 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 
 `transcript.json` (format 1) holds `segments`, sorted by time. Each has `start` and `end` (seconds in the recorded audio, the same timeline as the marks), `speaker` (`me` or `them`), `language`, `text` and `echo`. Echo lines stay in the file; the exports and the summary leave them out.
 
+## Storage cleanup
+
+Settings can delete old meetings after 30 days, 90 days or a year, counted from the start of the recording: either their audio and video (the transcript and summary stay) or the whole meeting folder. It is off by default. Debrief checks a minute after launch, every 12 hours and when the setting changes; a change that would delete something right away asks first. A meeting without a transcript, one being recorded and one in the processing queue are never touched.
+
+Everything goes to the Trash, through NSFileManager rather than Finder (which would ask for permission to control Finder), so it can be taken back; the space comes back when the Trash is emptied. A meeting can also be moved to the Trash by hand, from the Meeting screen or the sidebar's right-click menu, after a confirmation.
+
 ## App settings
 
 The app's own files live in `~/Library/Application Support/io.github.ksilisk.debrief/`, never in Documents (which macOS may sync to iCloud):
 
-- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), names and terms and the model for Whisper, the last choices on the New recording screen (video and frame rate among them), and the summary provider, model, model context, answer limit and whether new recordings write a summary.
+- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), names and terms and the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context, answer limit and whether new recordings write a summary, and the storage cleanup (what to delete and after how many days; never by default).
 - `summary-prompt.txt`: the instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language.
 - `keys.json`: API keys by provider, created with mode 600 so only the owner can read it.
 - `models/`: the downloaded Whisper models; `settings.json` names the one in use (left out for the default). When a download finishes and the model in use isn't downloaded, Debrief switches to the new one. Meetings that couldn't be transcribed for want of a model are processed when a download finishes (only those from the running session; older ones have Process now).

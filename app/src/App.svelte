@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { Menu } from "@tauri-apps/api/menu";
   import { screenTitles, type Screen } from "./lib/screens";
-  import { clock, currentRecording, events, type Live, type LiveStatus, type Saved } from "./lib/recording";
+  import { clock, currentRecording, events, showInFinder, type Live, type LiveStatus, type Saved } from "./lib/recording";
   import {
     dayLabel,
     duration,
     listMeetings,
     meetingEvents,
+    moveToTrash,
     processingProgress,
     statusLabels,
     timeOfDay,
@@ -73,11 +75,35 @@
 
   async function refresh() {
     try {
+      const before = meetings;
       meetings = await listMeetings();
+      // The open meeting went to the Trash.
+      const listed = (list: MeetingItem[]) => list.some((item) => item.folder === selected);
+      if (selected && listed(before) && !listed(meetings)) {
+        selected = null;
+        if (screen === "meeting") screen = "new";
+      }
     } catch {
       // Opened in a plain browser (npm run dev) instead of the Tauri window.
     }
     version += 1;
+  }
+
+  async function meetingMenu(event: MouseEvent, item: MeetingItem) {
+    event.preventDefault();
+    const busy = item.status === "processing" || item.status === "waiting";
+    try {
+      const menu = await Menu.new({
+        items: [
+          { text: "Show in Finder", action: () => void showInFinder(item.folder).catch(() => {}) },
+          { item: "Separator" },
+          { text: "Move to Trash", enabled: !busy, action: () => void moveToTrash(item.folder).catch(() => {}) },
+        ],
+      });
+      await menu.popup();
+    } catch {
+      // Opened in a plain browser (npm run dev) instead of the Tauri window.
+    }
   }
 
   async function install() {
@@ -231,6 +257,7 @@
                 class="mitem"
                 aria-current={shown === "meeting" && selected === item.folder}
                 onclick={() => openMeeting(item.folder)}
+                oncontextmenu={(event) => void meetingMenu(event, item)}
               >
                 <b>{item.title}</b>
                 <span>

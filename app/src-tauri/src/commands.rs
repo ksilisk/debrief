@@ -14,6 +14,7 @@ use crate::recording::{self, Choices, Defaults, Live, SourceList};
 use crate::relaunch;
 use crate::settings::{self, Changes, ModelChoice, ModelView, View};
 use crate::speech_models;
+use crate::storage;
 use crate::updates;
 
 #[tauri::command]
@@ -117,6 +118,18 @@ pub async fn show_in_finder(folder: String) -> Result<(), String> {
     .await
 }
 
+/// Asks first; `false` when nothing was moved. Problems show in an alert.
+#[tauri::command]
+pub async fn delete_meeting(app: AppHandle, folder: String) -> Result<bool, String> {
+    blocking(move || {
+        Ok(storage::delete_meeting(
+            &app,
+            &library::checked_folder(&folder)?,
+        ))
+    })
+    .await
+}
+
 /// Puts text on the clipboard through `pbcopy`, which the web view can't always reach.
 #[tauri::command]
 pub fn copy_text(text: String) -> Result<(), String> {
@@ -140,6 +153,23 @@ pub async fn settings(app: AppHandle) -> Result<View, String> {
 #[tauri::command]
 pub async fn save_settings(changes: Changes) -> Result<(), String> {
     blocking(move || settings::save(changes)).await
+}
+
+/// Asks first when the new setting deletes something now; `false` when the
+/// answer was no and the setting stays as it was.
+#[tauri::command]
+pub async fn set_cleanup(
+    app: AppHandle,
+    after_days: Option<u32>,
+    delete: debrief_core::cleanup::Delete,
+) -> Result<bool, String> {
+    blocking(move || {
+        storage::change(
+            &app,
+            debrief_summarize::config::CleanupSettings { after_days, delete },
+        )
+    })
+    .await
 }
 
 /// `None` until the Whisper model is downloaded.

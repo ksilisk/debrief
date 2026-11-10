@@ -1,24 +1,29 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import InfoTip from "../lib/components/InfoTip.svelte";
   import Toggle from "../lib/components/Toggle.svelte";
   import { size } from "../lib/recording";
   import {
+    age,
     chooseMeetingsFolder,
     countHintTokens,
     editSummaryPrompt,
     loadSettings,
     providers,
     saveSettings,
+    setCleanup,
     summaryModels,
     tokens,
     useSummaryModel,
     type Changes,
+    type Delete,
     type ModelView,
     type Provider,
     type SettingsView,
   } from "../lib/settings";
   import { anyMissing, loadPermissions } from "../lib/permissions";
+  import { meetingEvents } from "../lib/meetings";
   import { checkForUpdates, installUpdate, type UpdateStatus } from "../lib/updates";
   import {
     cancelModelDownload,
@@ -38,6 +43,7 @@
   }: { onPermissions: () => void; update: UpdateStatus | null; speechModels: SpeechModels | null } = $props();
 
   const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
+  const CLEANUP_DAYS = [30, 90, 365];
   /** Names and terms are saved and counted once typing pauses this long, in milliseconds. */
   const TYPING_PAUSE = 300;
 
@@ -49,6 +55,7 @@
   /** null until checked. */
   let permissionsMissing = $state<boolean | null>(null);
   let updateError = $state<string | null>(null);
+  let storageError = $state<string | null>(null);
 
   const updateText = $derived.by(() => {
     switch (update?.state) {
@@ -83,6 +90,10 @@
   let choosingFolder = $state(false);
   let testing = $state(false);
   let connected = $state<string | null>(null);
+  /** "never" or a number of days. */
+  let cleanupAfter = $state("never");
+  let cleanupDelete = $state<Delete>("recordings");
+  let cleaning = $state(false);
 
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -96,6 +107,10 @@
     return ids;
   });
   const contextOptions = $derived([...new Set([...CONTEXT_CHOICES, contextTokens])].sort((a, b) => a - b));
+  /** The choices, plus a saved number of days that isn't one of them. */
+  const cleanupOptions = $derived(
+    [...new Set([...CLEANUP_DAYS, view?.cleanup.afterDays ?? CLEANUP_DAYS[0]])].sort((a, b) => a - b),
+  );
   const maxHints = $derived(view?.maxHintTokens ?? 0);
   const overLimit = $derived(hintTokens !== null && hintTokens > maxHints);
   const summaryStatus = $derived(
@@ -107,7 +122,10 @@
     loadPermissions()
       .then((permissions) => (permissionsMissing = anyMissing(permissions)))
       .catch(() => {});
+    // Meetings can go to the Trash while Settings is open.
+    const listening = listen(meetingEvents.changed, () => void loadUsage()).catch(() => undefined);
     return () => {
+      void listening.then((unlisten) => unlisten?.());
       if (hintTimer !== undefined) {
         clearTimeout(hintTimer);
         void saveHints();
@@ -126,8 +144,42 @@
       provider = loaded.summary.provider ?? "";
       model = loaded.summary.model;
       contextTokens = loaded.summary.contextTokens;
+      showCleanup(loaded);
     } catch (e) {
       loadError = String(e);
+    }
+  }
+
+  async function loadUsage() {
+    try {
+      const loaded = await loadSettings();
+      if (view) view.cleanup.usage = loaded.cleanup.usage;
+    } catch {
+      // The next change shows the problem.
+    }
+  }
+
+  function showCleanup(loaded: SettingsView) {
+    cleanupAfter = loaded.cleanup.afterDays === null ? "never" : String(loaded.cleanup.afterDays);
+    cleanupDelete = loaded.cleanup.delete;
+  }
+
+  async function changeCleanup() {
+    cleaning = true;
+    storageError = null;
+    try {
+      await setCleanup(cleanupAfter === "never" ? null : Number(cleanupAfter), cleanupDelete);
+    } catch (e) {
+      storageError = String(e);
+    }
+    // A "no" in the confirmation keeps the saved setting; show it again.
+    try {
+      view = await loadSettings();
+      showCleanup(view);
+    } catch (e) {
+      storageError = String(e);
+    } finally {
+      cleaning = false;
     }
   }
 
@@ -545,6 +597,56 @@
     </section>
     {#if summaryError}
       <p class="error" role="alert">{summaryError}</p>
+    {/if}
+
+    <section class="group">
+      <h3>Storage</h3>
+      <div class="row">
+        <span class="k"
+          ><label for="cleanup-delete">What to delete</label><InfoTip
+            label="What to delete"
+            text="Audio and video: the recordings go, the transcript and summary stay. Whole meeting: the meeting folder goes, transcript and summary included."
+          /></span
+        >
+        <span class="v">
+          <span class="select"
+            ><select
+              id="cleanup-delete"
+              bind:value={cleanupDelete}
+              onchange={changeCleanup}
+              disabled={cleaning}
+            >
+              <option value="recordings">Audio and video</option>
+              <option value="meeting">Whole meeting</option>
+            </select></span
+          >
+        </span>
+      </div>
+      <div class="row">
+        <span class="k"
+          ><label for="cleanup-after">Delete after</label><InfoTip
+            label="Delete after"
+            text="Meetings older than this go to the Trash, counted from the day they were recorded. Debrief checks at launch and every 12 hours. A meeting that isn’t transcribed yet is never deleted."
+          /></span
+        >
+        <span class="v">
+          <span class="select"
+            ><select id="cleanup-after" bind:value={cleanupAfter} onchange={changeCleanup} disabled={cleaning}>
+              <option value="never">Never</option>
+              {#each cleanupOptions as days (days)}
+                <option value={String(days)}>{age(days)}</option>
+              {/each}
+            </select></span
+          >
+          <span class="status">
+            {view.cleanup.usage.meetings === 1 ? "1 meeting takes" : `${view.cleanup.usage.meetings} meetings take`}
+            {size(view.cleanup.usage.bytes)}
+          </span>
+        </span>
+      </div>
+    </section>
+    {#if storageError}
+      <p class="error" role="alert">{storageError}</p>
     {/if}
 
     <section class="group">

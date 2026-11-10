@@ -3,7 +3,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-const MAIN: &str = "main";
+pub const MAIN: &str = "main";
 
 /// Tells the window which screen to show. The payload is a [`Screen`].
 const NAVIGATE: &str = "navigate";

@@ -50,6 +50,8 @@ export interface MeetingDetails extends MeetingItem {
   segments: Segment[];
   marks: number[];
   files: { name: string; bytes: number }[];
+  /** RFC 3339; when the storage cleanup deleted the audio and video. */
+  filesDeletedAt: string | null;
 }
 
 export interface Progress {
@@ -87,6 +89,8 @@ export const writeSummary = (folder: string) => invoke<void>("write_summary", { 
 export const stopProcessing = (folder: string) => invoke<void>("stop_processing", { folder });
 export const processingProgress = () => invoke<Progress | null>("processing_progress");
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
+/** Asks first; false when nothing was moved. Problems show in an alert. */
+export const moveToTrash = (folder: string) => invoke<boolean>("delete_meeting", { folder });
 
 export const statusLabels: Record<Status, string> = {
   recording: "Recording",

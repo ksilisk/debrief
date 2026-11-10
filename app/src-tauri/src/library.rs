@@ -58,6 +58,8 @@ pub struct Details {
     pub segments: Vec<SegmentView>,
     pub marks: Vec<f64>,
     pub files: Vec<FileView>,
+    /// RFC 3339; when the storage cleanup deleted the audio and video.
+    pub files_deleted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +168,7 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Resul
             .unwrap_or_default(),
         marks: meeting.marks.iter().map(|mark| mark.at_seconds).collect(),
         files: files(folder),
+        files_deleted_at: meeting.recording.files_deleted_at.map(|at| at.to_rfc3339()),
     })
 }
 

@@ -10,6 +10,7 @@
     languageName,
     longDate,
     meetingDetails,
+    moveToTrash,
     processMeeting,
     stopProcessing,
     writeSummary,
@@ -171,6 +172,7 @@
 
   function fileNote(name: string): string {
     if (/^screen-\d+\.mp4$/.test(name)) return "A video part that could not be joined";
+    if (name === "transcript.srt" && details?.filesDeletedAt) return "Subtitles";
     return fileNotes[name] ?? "";
   }
 
@@ -194,6 +196,11 @@
         <button type="button" class="btn primary" onclick={copySummary}>{copied ? "Copied" : "Copy summary"}</button>
       {/if}
       <button type="button" class="btn" onclick={() => run(() => showInFinder(details?.folder ?? ""))}>Show in Finder</button>
+      {#if !busy && details.status !== "recording"}
+        <button type="button" class="btn" onclick={() => run(async () => void (await moveToTrash(folder)))}>
+          Move to Trash
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -287,7 +294,8 @@
               {#if summaryFailed}
                 {stepOf("summary")?.error ?? "Writing it failed."}
               {:else}
-                Summaries were off when it was recorded. The transcript and audio are in the meeting folder.
+                Summaries were off when it was recorded. The transcript{details.filesDeletedAt ? "" : " and audio"}
+                {details.filesDeletedAt ? "is" : "are"} in the meeting folder.
               {/if}
             </p>
             {#if summaryModel}
@@ -339,6 +347,9 @@
             {/each}
           </tbody>
         </table>
+        {#if details.filesDeletedAt}
+          <p class="sub files-note">The audio and video went to the Trash on {longDate(details.filesDeletedAt)}.</p>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -687,6 +698,10 @@
   /* Files */
   .files-wrap {
     overflow-x: auto;
+  }
+
+  .files-note {
+    margin-top: 12px;
   }
 
   .files {

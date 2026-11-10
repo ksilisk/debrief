@@ -946,6 +946,7 @@ dependencies = [
  "debrief-core",
  "debrief-summarize",
  "debrief-transcribe",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",

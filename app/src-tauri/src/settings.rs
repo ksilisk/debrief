@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use debrief_core::cleanup::{self, Delete, Usage};
 use debrief_summarize::config::{self, ConfigError, Keys, Provider, Settings, masked};
 use debrief_summarize::{chat_models, list_models};
 use debrief_transcribe::hints::{self, MAX_TOKENS, Vocab};
@@ -29,6 +30,17 @@ pub struct View {
     pub hint_tokens: Option<usize>,
     pub max_hint_tokens: usize,
     pub summary: SummaryView,
+    pub cleanup: CleanupView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupView {
+    /// `None` never deletes anything.
+    pub after_days: Option<u32>,
+    pub delete: Delete,
+    /// What the meetings take now.
+    pub usage: Usage,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +104,7 @@ pub fn view(app: &AppHandle) -> Result<View, String> {
     let keys = Keys::load(&folder).map_err(failed)?;
     let library = settings.library().map_err(failed)?;
     let hint_tokens = count_hints(app, &settings.transcription.hints);
+    let usage = cleanup::usage(&library);
     let summary = settings.summary;
     Ok(View {
         meetings_folder: with_tilde(&library),
@@ -109,6 +122,11 @@ pub fn view(app: &AppHandle) -> Result<View, String> {
                 openai: keys.get(Provider::Openai).map(masked),
                 anthropic: keys.get(Provider::Anthropic).map(masked),
             },
+        },
+        cleanup: CleanupView {
+            after_days: settings.cleanup.after_days,
+            delete: settings.cleanup.delete,
+            usage,
         },
     })
 }
@@ -283,7 +301,7 @@ pub(crate) fn with_tilde(path: &Path) -> String {
     }
 }
 
-fn failed(error: ConfigError) -> String {
+pub(crate) fn failed(error: ConfigError) -> String {
     let text = error.to_string();
     let mut chars = text.chars();
     match chars.next() {

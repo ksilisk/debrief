@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use debrief_core::APP_ID;
+use debrief_core::cleanup::{Delete, Rule};
 use debrief_core::meeting::{self, Language};
 use serde::{Deserialize, Serialize};
 
@@ -114,9 +115,30 @@ pub struct Settings {
     pub recording: RecordingSettings,
     #[serde(default)]
     pub transcription: TranscriptionSettings,
+    #[serde(default)]
+    pub cleanup: CleanupSettings,
     /// Where new meetings go; `None` uses `~/Documents/Debrief`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meetings_folder: Option<PathBuf>,
+}
+
+/// What the storage cleanup deletes, and after how many days.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CleanupSettings {
+    /// `None` never deletes anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_days: Option<u32>,
+    pub delete: Delete,
+}
+
+impl CleanupSettings {
+    pub fn rule(self) -> Option<Rule> {
+        self.after_days.map(|after_days| Rule {
+            after_days,
+            delete: self.delete,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -356,6 +378,10 @@ mod tests {
         settings.recording.app = Some("us.zoom.xos".into());
         settings.recording.language = Language::Auto;
         settings.transcription.hints = "Grafana, Telemost".into();
+        settings.cleanup = CleanupSettings {
+            after_days: Some(90),
+            delete: Delete::Meeting,
+        };
         settings.meetings_folder = Some(PathBuf::from("/Volumes/Work/Meetings"));
         settings.save(&folder).expect("save");
         assert_eq!(Settings::load(&folder).expect("load"), settings);
@@ -374,6 +400,7 @@ mod tests {
         assert!(settings.summary.on_by_default);
         assert_eq!(settings.recording, RecordingSettings::default());
         assert_eq!(settings.transcription, TranscriptionSettings::default());
+        assert_eq!(settings.cleanup.rule(), None);
         assert_eq!(settings.library().ok(), meeting::default_library());
     }
 

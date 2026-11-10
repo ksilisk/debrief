@@ -12,6 +12,8 @@ mod recording;
 mod relaunch;
 mod settings;
 mod speech_models;
+mod storage;
+mod trash;
 mod tray;
 mod updates;
 mod window;
@@ -39,6 +41,7 @@ pub fn run() {
         .manage(settings::HintCounter::default())
         .manage(updates::Updates::default())
         .manage(speech_models::Downloads::default())
+        .manage(storage::Cleaner::default())
         .menu(app_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -71,9 +74,11 @@ pub fn run() {
             commands::stop_processing,
             commands::processing_progress,
             commands::show_in_finder,
+            commands::delete_meeting,
             commands::copy_text,
             commands::settings,
             commands::save_settings,
+            commands::set_cleanup,
             commands::count_hint_tokens,
             commands::choose_meetings_folder,
             commands::summary_models,
@@ -101,6 +106,7 @@ pub fn run() {
             in_background(app, tray::refresh_recent);
             hotkey::register_start_or_stop(app);
             updates::start(app);
+            storage::start(app);
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod cleanup;
 pub mod export;
 mod files;
 pub mod meeting;

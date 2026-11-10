@@ -80,6 +80,9 @@ pub struct Recording {
     pub stopped_at: Option<DateTime<FixedOffset>>,
     pub duration_seconds: f64,
     pub error: Option<String>,
+    /// When the storage cleanup deleted the audio and video.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_deleted_at: Option<DateTime<FixedOffset>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -257,6 +260,7 @@ impl Meeting {
                 stopped_at: None,
                 duration_seconds: 0.0,
                 error: None,
+                files_deleted_at: None,
             },
             settings,
             tracks: AudioTracks {

@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Provider = "openai" | "anthropic";
+export type Delete = "recordings" | "meeting";
 
 export interface SettingsView {
   /** With `~` for the home folder. */
@@ -22,6 +23,13 @@ export interface SettingsView {
     onByDefault: boolean;
     /** The saved keys, masked. */
     keys: Record<Provider, string | null>;
+  };
+  cleanup: {
+    /** null never deletes anything. */
+    afterDays: number | null;
+    delete: Delete;
+    /** What the meetings take now. */
+    usage: { meetings: number; bytes: number };
   };
 }
 
@@ -63,6 +71,15 @@ export const summaryModels = (provider: Provider, key: string | null) =>
   invoke<ModelView[]>("summary_models", { provider, key });
 export const useSummaryModel = (choice: ModelChoice) => invoke<void>("use_summary_model", { choice });
 export const editSummaryPrompt = () => invoke<void>("edit_summary_prompt");
+/** false when the user chose not to delete what the new setting applies to now. */
+export const setCleanup = (afterDays: number | null, del: Delete) =>
+  invoke<boolean>("set_cleanup", { afterDays, delete: del });
+
+/** "30 days", "1 year". */
+export function age(days: number): string {
+  if (days === 365) return "1 year";
+  return days === 1 ? "1 day" : `${days} days`;
+}
 
 /** `128k tokens`, `1M tokens`. */
 export function tokens(count: number): string {

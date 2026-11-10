@@ -29,3 +29,6 @@ tauri-plugin-updater.workspace = true
 serde.workspace = true
 # tauri::generate_context! uses it once tauri.conf.json has plugin settings.
 serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { workspace = true, features = ["NSFileManager"] }

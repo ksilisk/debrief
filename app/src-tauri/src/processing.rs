@@ -114,6 +114,14 @@ pub fn summarize(app: &AppHandle, folder: &Path) {
     enqueue(app, folder, Kind::Summarize);
 }
 
+/// The meeting went to the Trash, so it no longer waits for a model.
+pub fn forget(app: &AppHandle, folder: &Path) {
+    let folder = canonical(folder);
+    lock(&app.state::<Queue>().state)
+        .need_model
+        .retain(|waiting| *waiting != folder);
+}
+
 /// Stops the meeting's processing, or takes it out of the queue. The steps that
 /// are done stay done, so processing it again continues from there.
 pub fn stop(app: &AppHandle, folder: &Path) {
