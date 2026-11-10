@@ -10,20 +10,26 @@ use debrief_core::transcript::{Line, TrackText};
 use whisper_rs::whisper_rs_sys as sys;
 
 use crate::hints;
+use crate::invented::without_invented;
+use crate::speech::{Joined, Span, Vad, snap};
 
 const MAX_THREADS: usize = 8;
 const BEST_OF: c_int = 5;
 
 #[derive(Debug, thiserror::Error)]
-#[error("could not load the Whisper model {}", path.display())]
-pub struct LoadError {
-    path: PathBuf,
+pub enum LoadError {
+    #[error("could not load the Whisper model {}", path.display())]
+    Model { path: PathBuf },
+    #[error("could not load the speech detector (Silero VAD)")]
+    Vad,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum RunError {
     #[error("there is no audio to transcribe")]
     NoAudio,
+    #[error("the speech detector (Silero VAD) could not read the audio")]
+    NoSpeechCheck,
     #[error("Whisper could not set up its working memory")]
     NoState,
     #[error("Whisper stopped with error {0}")]
@@ -32,11 +38,15 @@ enum RunError {
 
 /// Whisper on the GPU (Metal on macOS). The model stays loaded for both tracks.
 ///
+/// Whisper only gets the speech that Silero VAD finds: on silence, which is
+/// most of each track, it writes lines that were never said.
+///
 /// It calls whisper.cpp's C API directly because whisper-rs has no setter for
 /// `carry_initial_prompt`, which keeps the names and terms in front of every
 /// 30-second window instead of only the first few.
 pub struct Whisper {
     context: NonNull<sys::whisper_context>,
+    vad: Vad,
     model: String,
     threads: c_int,
     prompt: Option<CString>,
@@ -48,7 +58,7 @@ unsafe impl Send for Whisper {}
 
 impl Whisper {
     pub fn load(path: &Path, model: &str) -> Result<Self, LoadError> {
-        let failed = || LoadError {
+        let failed = || LoadError::Model {
             path: path.to_path_buf(),
         };
         // whisper.cpp logs to stderr by default; this sends its logs nowhere.
@@ -64,10 +74,18 @@ impl Whisper {
             sys::whisper_init_from_file_with_params_no_state(c_path.as_ptr(), params)
         };
         let context = NonNull::new(context).ok_or_else(failed)?;
+        let vad = match Vad::load() {
+            Some(vad) => vad,
+            None => {
+                unsafe { sys::whisper_free(context.as_ptr()) };
+                return Err(LoadError::Vad);
+            }
+        };
         let threads =
             std::thread::available_parallelism().map_or(4, |n| n.get().min(MAX_THREADS)) as c_int;
         Ok(Self {
             context,
+            vad,
             model: model.to_string(),
             threads,
             prompt: None,
@@ -106,6 +124,23 @@ impl Transcriber for Whisper {
         if audio.is_empty() {
             return Err(failed(RunError::NoAudio));
         }
+        let speech = self
+            .vad
+            .speech(audio)
+            .ok_or_else(|| failed(RunError::NoSpeechCheck))?;
+        if progress.is_cancelled() {
+            return Err(TranscribeError::Cancelled);
+        }
+        if speech.is_empty() {
+            return Ok(TrackText {
+                language: match language {
+                    Language::Auto => String::new(),
+                    fixed => fixed.code().to_string(),
+                },
+                lines: Vec::new(),
+            });
+        }
+        let joined = Joined::new(audio, &speech);
         let state = State::new(self.context).ok_or_else(|| failed(RunError::NoState))?;
 
         let mut params = unsafe {
@@ -118,6 +153,8 @@ impl Transcriber for Whisper {
         params.print_realtime = false;
         params.print_special = false;
         params.print_timestamps = false;
+        // Otherwise large-v3 can fill a track with "*звук текста*" and the like.
+        params.suppress_nst = true;
         if let Some(prompt) = &self.prompt {
             params.initial_prompt = prompt.as_ptr();
             params.carry_initial_prompt = true;
@@ -133,8 +170,8 @@ impl Transcriber for Whisper {
                 self.context.as_ptr(),
                 state.0.as_ptr(),
                 params,
-                audio.as_ptr(),
-                audio.len() as c_int,
+                joined.audio.as_ptr(),
+                joined.audio.len() as c_int,
             )
         };
         drop(cancelled);
@@ -144,7 +181,7 @@ impl Transcriber for Whisper {
         if code != 0 {
             return Err(failed(RunError::Failed(code)));
         }
-        Ok(state.text(language))
+        Ok(state.text(language, &joined, &speech))
     }
 }
 
@@ -156,7 +193,8 @@ impl State {
         NonNull::new(unsafe { sys::whisper_init_state(context.as_ptr()) }).map(Self)
     }
 
-    fn text(&self, language: Language) -> TrackText {
+    /// Lines with their times in the track, without the ones Whisper invented.
+    fn text(&self, language: Language, joined: &Joined, speech: &[Span]) -> TrackText {
         let state = self.0.as_ptr();
         let detected = unsafe {
             let code = sys::whisper_lang_str(sys::whisper_full_lang_id_from_state(state));
@@ -170,17 +208,26 @@ impl State {
                     return None;
                 }
                 let text = CStr::from_ptr(text).to_string_lossy().trim().to_string();
-                (!text.is_empty()).then(|| Line {
-                    start: sys::whisper_full_get_segment_t0_from_state(state, segment) as f64
-                        / 100.0,
-                    end: sys::whisper_full_get_segment_t1_from_state(state, segment) as f64 / 100.0,
+                if text.is_empty() {
+                    return None;
+                }
+                let start = sys::whisper_full_get_segment_t0_from_state(state, segment) as f64;
+                let end = sys::whisper_full_get_segment_t1_from_state(state, segment) as f64;
+                let (start, end) = snap(
+                    joined.in_track(start / 100.0, true),
+                    joined.in_track(end / 100.0, false),
+                    speech,
+                );
+                Some(Line {
+                    start,
+                    end: end.max(start),
                     text,
                 })
             })
             .collect();
         TrackText {
             language: detected.unwrap_or_else(|| language.code().to_string()),
-            lines,
+            lines: without_invented(lines),
         }
     }
 }

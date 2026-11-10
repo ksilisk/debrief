@@ -15,7 +15,7 @@ Status: agreed plan, November 2026.
 | Windows / Linux capture | `cpal` plus WASAPI / PipeWire modules | Later (v0.3), same interface |
 | Audio files | `hound` writes WAV while recording | WAV survives a crash best. Compression (m4a or other) and sizes are decided later |
 | Resampling | `rubato` → 16 kHz mono for Whisper | |
-| Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal); large-v3-turbo by default, or its 5-bit version or large-v3 | One pass per whole track. Called through whisper.cpp's C API (`raw-api`), because whisper-rs can't set `carry_initial_prompt`, which keeps the names and terms in front of every 30-second window. Silence detection and Auto per piece are measured in M0.3 first; `transcribe-rs` if Parakeet wins there |
+| Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal); large-v3-turbo by default, or its 5-bit version or large-v3; Silero VAD 5.1.2 (whisper.cpp's, built into the app) | One pass per track over its speech only (chosen in M0.3: on silence Whisper invents lines). Called through whisper.cpp's C API (`raw-api`), because whisper-rs can't set `carry_initial_prompt`, which keeps the names and terms in front of every 30-second window. Parakeet (`transcribe-rs`) is not tested yet |
 | Model files | `reqwest` (blocking, native TLS) + `sha2` | Downloaded from Hugging Face with one click (New recording, Meeting or Settings) or `debrief model download`, into `~/Library/Application Support/io.github.ksilisk.debrief/models`. A stopped download continues from its `.part` file (HTTP range); the result is checked by size and SHA-256. The download first checks free space as Finder counts it (`volumeAvailableCapacityForImportantUsage`) |
 | Token counter | whisper.cpp's vocabulary, read from the model file's header | Counts “Names and terms” the way whisper.cpp splits them, without loading the model (limit: 223 tokens, half the text context less one) |
 | Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`); other providers later |
@@ -55,13 +55,13 @@ debrief/
 
 **Processing** is a background job. Each step saves its status in `meeting.json`, so a crash or quit resumes from the last finished step:
 
-1. **Transcribe** each track: converted to 16 kHz mono in memory, then one Whisper pass over the whole track in the meeting's language. Each track's result is kept in `.work/`, so a resume redoes only an unfinished track.
+1. **Transcribe** each track: converted to 16 kHz mono in memory; Silero VAD finds the speech, and Whisper gets only that, joined with 0.1 s gaps the way whisper.cpp's own VAD joins it, in one pass in the meeting's language. Line times are mapped back to the track; a line edge Whisper put on the wrong side of a pause moves to the speech, and lines Whisper is known to invent (subtitle credits, sound tags, three identical lines in a row) are dropped. A track without speech gets no lines. Each track's result is kept in `.work/`, so a resume redoes only an unfinished track.
 2. **Merge** both tracks by time into `transcript.json`, marking echo lines: a Me line that overlaps Them lines within a second and shares at least 60% of its three-letter chunks with them, so the microphone heard the speakers. Lines under 8 letters are never marked.
 3. **Export** `transcript.md`, `transcript.txt`, `transcript.srt`: lines that aren't echo, in time order, with marked moments and pauses where they happened, and a count of the echo lines left out. Each subtitle holds at most two lines of 42 characters; a longer line is split and its time shared by length.
 4. **Summary**, if summaries are on for the meeting (otherwise skipped): the transcript as plain text, without echo lines, goes to the chosen model with the user's prompt, and the answer is saved as `summary.md` and, without Markdown, `summary.txt`. Before sending, the size is estimated (characters ÷ 3, plus room for the answer); a transcript that doesn't fit the model's context is refused, not split. `debrief summarize` writes or rewrites a summary at any time.
 5. **Compress** the audio: not done yet; the tracks stay WAV for now.
 
-The language is set per meeting, Russian by default. Auto lets Whisper detect one language per track from its first 30 seconds; since Me and Them are separate tracks, a meeting where each side speaks its own language works, but a track that switches language midway does not (see M0.3).
+The language is set per meeting, Russian by default. Auto lets Whisper detect one language per track from the first 30 seconds of its speech; since Me and Them are separate tracks, a meeting where each side speaks its own language works, but a track that switches language midway does not (see M0.3).
 
 Audio and video never leave the computer. Only the transcript text is sent, and only to the summary provider the user chose.
 
@@ -138,6 +138,6 @@ An update downloaded by the app isn't quarantined, so only the first install fro
 ## Main risks
 
 - ScreenCaptureKit details: choosing the microphone, audio-only mode (the stream still needs a display; it gets a tiny one that is ignored). Covered by M0.2. M0.2 also showed that the app filter misses Chrome's helper processes, so one-app audio uses a Core Audio process tap. All-app audio moved to a tap too (M2.2), after ScreenCaptureKit's system audio turned to silence mid-recording when the volume keys were pressed.
-- Quality of mixed Russian and English transcription. Covered by M0.3, which runs once Debrief records real meetings; until then the default stays large-v3-turbo.
+- Quality of mixed Russian and English transcription. M0.3 chose the defaults on a real Russian meeting (large-v3-turbo, speech only, fixed language); a meeting that mixes both languages is still to be checked.
 - Local servers often run with a small context and cut longer input. The app doesn't recommend a local model; M1.5 checks the OpenAI-compatible path against Ollama or LM Studio.
 - The `screencapturekit` crate releases major versions often; pin it exactly.
