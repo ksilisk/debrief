@@ -10,10 +10,6 @@ export interface SettingsView {
   meetingsFolder: string;
   video: boolean;
   fps: number;
-  hints: string;
-  /** null until the Whisper model is downloaded. */
-  hintTokens: number | null;
-  maxHintTokens: number;
   whisper: { name: string; bytes: number; downloaded: boolean };
   summary: {
     /** null until summaries are set up. */
@@ -37,7 +33,6 @@ export interface SettingsView {
 export interface Changes {
   video?: boolean;
   fps?: number;
-  hints?: string;
   summariesOn?: boolean;
   contextTokens?: number;
 }
@@ -65,7 +60,6 @@ export const providers: { id: Provider; label: string; host: string }[] = [
 
 export const loadSettings = () => invoke<SettingsView>("settings");
 export const saveSettings = (changes: Changes) => invoke<void>("save_settings", { changes });
-export const countHintTokens = (hints: string) => invoke<number | null>("count_hint_tokens", { hints });
 export const chooseMeetingsFolder = () => invoke<string | null>("choose_meetings_folder");
 export const summaryModels = (provider: Provider, key: string | null) =>
   invoke<ModelView[]>("summary_models", { provider, key });

@@ -31,11 +31,6 @@ fn show() -> anyhow::Result<()> {
     let all = Settings::load(&folder)?;
     println!("Recording");
     println!("  meetings folder  {}", all.library()?.display());
-    let hints = all.transcription.hints.trim();
-    println!(
-        "  names and terms  {}",
-        if hints.is_empty() { "none" } else { hints }
-    );
     let settings = all.summary;
     let keys = Keys::load(&folder)?;
     config::prompt(&folder)?;

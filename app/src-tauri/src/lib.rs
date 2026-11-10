@@ -38,7 +38,6 @@ pub fn run() {
         .plugin(hotkey::plugin(start_or_stop, mark))
         .manage(recording::Current::default())
         .manage(processing::Queue::default())
-        .manage(settings::HintCounter::default())
         .manage(updates::Updates::default())
         .manage(speech_models::Downloads::default())
         .manage(storage::Cleaner::default())
@@ -79,7 +78,6 @@ pub fn run() {
             commands::settings,
             commands::save_settings,
             commands::set_cleanup,
-            commands::count_hint_tokens,
             commands::choose_meetings_folder,
             commands::summary_models,
             commands::use_summary_model,

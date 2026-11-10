@@ -7,7 +7,6 @@
   import {
     age,
     chooseMeetingsFolder,
-    countHintTokens,
     editSummaryPrompt,
     loadSettings,
     providers,
@@ -44,13 +43,10 @@
 
   const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
   const CLEANUP_DAYS = [30, 90, 365];
-  /** Names and terms are saved and counted once typing pauses this long, in milliseconds. */
-  const TYPING_PAUSE = 300;
 
   let view = $state<SettingsView | null>(null);
   let loadError = $state<string | null>(null);
   let recordingError = $state<string | null>(null);
-  let hintsError = $state<string | null>(null);
   let summaryError = $state<string | null>(null);
   /** null until checked. */
   let permissionsMissing = $state<boolean | null>(null);
@@ -78,8 +74,6 @@
 
   /** "5", "10" or "off". */
   let video = $state("5");
-  let hints = $state("");
-  let hintTokens = $state<number | null>(null);
   let summariesOn = $state(false);
   let provider = $state<Provider | "">("");
   let keyInput = $state("");
@@ -95,8 +89,6 @@
   let cleanupDelete = $state<Delete>("recordings");
   let cleaning = $state(false);
 
-  let hintTimer: ReturnType<typeof setTimeout> | undefined;
-
   const saved = $derived(view?.summary ?? null);
   const host = $derived(providers.find((p) => p.id === provider)?.host ?? null);
   const savedKey = $derived(provider !== "" && saved ? saved.keys[provider] : null);
@@ -111,8 +103,6 @@
   const cleanupOptions = $derived(
     [...new Set([...CLEANUP_DAYS, view?.cleanup.afterDays ?? CLEANUP_DAYS[0]])].sort((a, b) => a - b),
   );
-  const maxHints = $derived(view?.maxHintTokens ?? 0);
-  const overLimit = $derived(hintTokens !== null && hintTokens > maxHints);
   const summaryStatus = $derived(
     saved?.provider ? `${providerLabel(saved.provider)} · ${saved.model}` : "Not set up yet",
   );
@@ -126,10 +116,6 @@
     const listening = listen(meetingEvents.changed, () => void loadUsage()).catch(() => undefined);
     return () => {
       void listening.then((unlisten) => unlisten?.());
-      if (hintTimer !== undefined) {
-        clearTimeout(hintTimer);
-        void saveHints();
-      }
     };
   });
 
@@ -138,8 +124,6 @@
       const loaded = await loadSettings();
       view = loaded;
       video = loaded.video ? String(loaded.fps) : "off";
-      hints = loaded.hints;
-      hintTokens = loaded.hintTokens;
       summariesOn = loaded.summary.onByDefault;
       provider = loaded.summary.provider ?? "";
       model = loaded.summary.model;
@@ -214,24 +198,6 @@
     void save(on ? { video: on, fps: Number(video) } : { video: on }, (e) => (recordingError = e));
   }
 
-  function typedHints() {
-    clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => void saveHints(), TYPING_PAUSE);
-  }
-
-  async function saveHints() {
-    hintTimer = undefined;
-    const text = hints;
-    try {
-      await saveSettings({ hints: text });
-      const count = await countHintTokens(text);
-      if (text === hints) hintTokens = count;
-      hintsError = null;
-    } catch (e) {
-      hintsError = String(e);
-    }
-  }
-
   function changeSummariesOn(on: boolean) {
     summariesOn = on;
     void save({ summariesOn: on }, (e) => (summaryError = e));
@@ -291,18 +257,6 @@
   }
 
   let modelError = $state<string | null>(null);
-
-  // The token count needs a downloaded model; count again once one arrives.
-  $effect(() => {
-    if (hintTokens === null && speechModels?.models.some((model) => model.downloaded)) {
-      const text = hints;
-      countHintTokens(text)
-        .then((count) => {
-          if (text === hints) hintTokens = count;
-        })
-        .catch(() => {});
-    }
-  });
 
   function modelState(model: ModelInfo): string {
     const download = speechModels?.download;
@@ -458,28 +412,7 @@
           {/if}
         </div>
       </div>
-      <div class="row">
-        <span class="k"
-          ><label for="hints">Names and terms</label><InfoTip
-            label="Names and terms"
-            text={`Spelling hints for Whisper: names, products and jargon it might otherwise misspell. Put each on its own line or separate them with commas. Everything said is still transcribed; this list only helps spelling. Whisper uses only the last ${maxHints} tokens.`}
-          /></span
-        >
-        <span class="v">
-          <textarea id="hints" bind:value={hints} oninput={typedHints} spellcheck="false" placeholder="Grafana, Kubernetes, Telemost"></textarea>
-          <span class="tokens" class:over={overLimit} aria-live="polite">
-            {#if hintTokens === null}
-              The token count appears once the Whisper model is downloaded.
-            {:else}
-              {hintTokens} / {maxHints} tokens{overLimit ? " · too long: Whisper drops the words at the start" : ""}
-            {/if}
-          </span>
-        </span>
-      </div>
     </section>
-    {#if hintsError}
-      <p class="error" role="alert">{hintsError}</p>
-    {/if}
 
     <section class="group">
       <h3>Summaries (optional)</h3>
@@ -824,29 +757,6 @@
     background: var(--surface);
     color: var(--ink);
     font: 500 11px var(--font-mono);
-  }
-
-  textarea {
-    width: 100%;
-    min-height: 54px;
-    padding: 6px 8px;
-    resize: vertical;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-    font-size: 13px;
-  }
-
-  .tokens {
-    flex-basis: 100%;
-    font: 12px var(--font-mono);
-    color: var(--muted);
-  }
-
-  .tokens.over {
-    color: var(--rec);
   }
 
   .text {

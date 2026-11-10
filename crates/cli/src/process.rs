@@ -25,10 +25,6 @@ pub struct Args {
     /// A Whisper model file. Default: the one `debrief model download` saves.
     #[arg(long)]
     model: Option<PathBuf>,
-    /// Names and terms Whisper should spell right, separated by commas.
-    /// Default: the ones from Settings.
-    #[arg(long)]
-    hints: Option<String>,
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -61,15 +57,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     };
     println!("Loading Whisper {name}");
     let mut whisper = Whisper::load(&path, &name)?;
-    let hints = match args.hints {
-        Some(hints) => hints,
-        None => {
-            config::Settings::load(&config::folder()?)?
-                .transcription
-                .hints
-        }
-    };
-    whisper.set_hints(&hints);
 
     let (mut summarizer, setup_problem) = match RemoteModel::from_settings() {
         Ok(model) => (model, None),

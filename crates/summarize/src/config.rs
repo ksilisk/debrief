@@ -144,8 +144,6 @@ impl CleanupSettings {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TranscriptionSettings {
-    /// Names and terms as typed, one or more per line.
-    pub hints: String,
     /// The Whisper model's name; `None` uses the default one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -377,7 +375,7 @@ mod tests {
         settings.summary.model = "claude-opus-5-5".into();
         settings.recording.app = Some("us.zoom.xos".into());
         settings.recording.language = Language::Auto;
-        settings.transcription.hints = "Grafana, Telemost".into();
+        settings.transcription.model = Some("large-v3".into());
         settings.cleanup = CleanupSettings {
             after_days: Some(90),
             delete: Delete::Meeting,

@@ -14,7 +14,7 @@ use debrief_core::process::{self, Event, ProcessError, Transcriber};
 use debrief_core::recording::Track;
 use debrief_core::repair::repair;
 use debrief_core::summary::Summarizer;
-use debrief_summarize::{RemoteModel, config};
+use debrief_summarize::RemoteModel;
 use debrief_transcribe::Whisper;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -265,7 +265,6 @@ fn run(
                 }
                 Err(Missing::Other(problem)) => return finished(Some(problem), false),
             };
-            transcriber.set_hints(&hints());
             tracker.progress.transcribe_model = transcriber.model().to_string();
             process::process(
                 folder,
@@ -336,14 +335,6 @@ fn loaded(whisper: &mut Option<Whisper>) -> Result<&mut Whisper, Missing> {
     whisper
         .as_mut()
         .ok_or_else(|| Missing::Other("Whisper did not load".into()))
-}
-
-/// Names and terms from Settings, read again for each meeting.
-fn hints() -> String {
-    config::folder()
-        .and_then(|folder| config::Settings::load(&folder))
-        .map(|settings| settings.transcription.hints)
-        .unwrap_or_default()
 }
 
 /// Like `debrief repair`: fixes a recording that was cut off before processing it.

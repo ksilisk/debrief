@@ -1,7 +1,6 @@
 //! Speech to text with Whisper (whisper.cpp): the speech detector that decides
-//! what Whisper hears, the model files and the names and terms it gets as hints.
+//! what Whisper hears, and the model files.
 
-pub mod hints;
 mod invented;
 pub mod models;
 mod speech;

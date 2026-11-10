@@ -9,7 +9,6 @@ use debrief_core::process::{Progress, TranscribeError, Transcriber};
 use debrief_core::transcript::{Line, TrackText};
 use whisper_rs::whisper_rs_sys as sys;
 
-use crate::hints;
 use crate::invented::without_invented;
 use crate::speech::{Joined, Span, Vad, snap};
 
@@ -41,15 +40,13 @@ enum RunError {
 /// Whisper only gets the speech that Silero VAD finds: on silence, which is
 /// most of each track, it writes lines that were never said.
 ///
-/// It calls whisper.cpp's C API directly because whisper-rs has no setter for
-/// `carry_initial_prompt`, which keeps the names and terms in front of every
-/// 30-second window instead of only the first few.
+/// It calls whisper.cpp's C API directly: whisper-rs has no wrapper for the
+/// speech detector.
 pub struct Whisper {
     context: NonNull<sys::whisper_context>,
     vad: Vad,
     model: String,
     threads: c_int,
-    prompt: Option<CString>,
 }
 
 // SAFETY: a whisper.cpp context can move to another thread; `&mut self` keeps
@@ -88,18 +85,7 @@ impl Whisper {
             vad,
             model: model.to_string(),
             threads,
-            prompt: None,
         })
-    }
-
-    /// Names and terms from Settings, used from the next track on. Empty clears them.
-    pub fn set_hints(&mut self, hints: &str) {
-        let prompt = hints::prompt(hints).replace('\0', "");
-        self.prompt = if prompt.is_empty() {
-            None
-        } else {
-            CString::new(prompt).ok()
-        };
     }
 }
 
@@ -155,10 +141,6 @@ impl Transcriber for Whisper {
         params.print_timestamps = false;
         // Otherwise large-v3 can fill a track with "*звук текста*" and the like.
         params.suppress_nst = true;
-        if let Some(prompt) = &self.prompt {
-            params.initial_prompt = prompt.as_ptr();
-            params.carry_initial_prompt = true;
-        }
         params.progress_callback = Some(on_progress);
         params.progress_callback_user_data = progress as *const Progress as *mut c_void;
         let cancelled = progress.cancelled_flag();
@@ -263,34 +245,4 @@ unsafe extern "C" fn on_progress(
 unsafe extern "C" fn should_abort(data: *mut c_void) -> bool {
     let cancelled = unsafe { &*(data as *const AtomicBool) };
     cancelled.load(Ordering::Relaxed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::hints::Vocab;
-    use crate::models::LARGE_V3_TURBO;
-
-    /// Run with `cargo test -p debrief-transcribe -- --ignored` after `debrief model download`.
-    #[test]
-    #[ignore = "needs the downloaded Whisper model"]
-    fn the_hint_count_matches_whisper_cpp() {
-        let path = LARGE_V3_TURBO.path().expect("model path");
-        let whisper = Whisper::load(&path, LARGE_V3_TURBO.name).expect("model");
-        let vocab = Vocab::load(&path).expect("vocab");
-        let samples = [
-            "Grafana, Kubernetes, Telemost, code freeze, onboarding",
-            "Алексей, Мария Иванова, ООО «Ромашка», Jira",
-            "don't we'll they're v2.0.1 — 42%  spaces   end  ",
-            "Ёлка, ёж; café naïve 東京 🙂",
-            "",
-        ];
-        for sample in samples {
-            let text = hints::prompt(sample);
-            let c_text = CString::new(text.clone()).expect("no null bytes");
-            let expected =
-                unsafe { sys::whisper_token_count(whisper.context.as_ptr(), c_text.as_ptr()) };
-            assert_eq!(vocab.count(&text), expected as usize, "{text:?}");
-        }
-    }
 }

@@ -146,8 +146,8 @@ pub fn copy_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn settings(app: AppHandle) -> Result<View, String> {
-    blocking(move || settings::view(&app)).await
+pub async fn settings() -> Result<View, String> {
+    blocking(settings::view).await
 }
 
 #[tauri::command]
@@ -170,12 +170,6 @@ pub async fn set_cleanup(
         )
     })
     .await
-}
-
-/// `None` until the Whisper model is downloaded.
-#[tauri::command]
-pub async fn count_hint_tokens(app: AppHandle, hints: String) -> Result<Option<usize>, String> {
-    blocking(move || Ok(settings::count_hints(&app, &hints))).await
 }
 
 /// The new folder, or `None` when the picker was cancelled.

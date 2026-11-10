@@ -4,15 +4,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use debrief_core::cleanup::{self, Delete, Usage};
 use debrief_summarize::config::{self, ConfigError, Keys, Provider, Settings, masked};
 use debrief_summarize::{chat_models, list_models};
-use debrief_transcribe::hints::{self, MAX_TOKENS, Vocab};
-use debrief_transcribe::models::MODELS;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::processing::{self, MEETINGS_CHANGED};
@@ -25,10 +22,6 @@ pub struct View {
     pub meetings_folder: String,
     pub video: bool,
     pub fps: u32,
-    pub hints: String,
-    /// `None` until the Whisper model is downloaded.
-    pub hint_tokens: Option<usize>,
-    pub max_hint_tokens: usize,
     pub summary: SummaryView,
     pub cleanup: CleanupView,
 }
@@ -67,7 +60,6 @@ pub struct SavedKeys {
 pub struct Changes {
     pub video: Option<bool>,
     pub fps: Option<u32>,
-    pub hints: Option<String>,
     pub summaries_on: Option<bool>,
     pub context_tokens: Option<usize>,
 }
@@ -94,25 +86,17 @@ pub struct ModelChoice {
     pub answer_tokens: Option<usize>,
 }
 
-/// Whisper's vocabulary for counting hint tokens, read once. Kept in Tauri's managed state.
-#[derive(Default)]
-pub struct HintCounter(Mutex<Option<Arc<Vocab>>>);
-
-pub fn view(app: &AppHandle) -> Result<View, String> {
+pub fn view() -> Result<View, String> {
     let folder = config::folder().map_err(failed)?;
     let settings = Settings::load(&folder).map_err(failed)?;
     let keys = Keys::load(&folder).map_err(failed)?;
     let library = settings.library().map_err(failed)?;
-    let hint_tokens = count_hints(app, &settings.transcription.hints);
     let usage = cleanup::usage(&library);
     let summary = settings.summary;
     Ok(View {
         meetings_folder: with_tilde(&library),
         video: settings.recording.video,
         fps: settings.recording.fps,
-        hints: settings.transcription.hints,
-        hint_tokens,
-        max_hint_tokens: MAX_TOKENS,
         summary: SummaryView {
             provider: summary.provider,
             model: summary.model,
@@ -139,9 +123,6 @@ pub fn save(changes: Changes) -> Result<(), String> {
         if let Some(fps) = changes.fps {
             settings.recording.fps = fps;
         }
-        if let Some(hints) = changes.hints {
-            settings.transcription.hints = hints;
-        }
         if let Some(on) = changes.summaries_on {
             settings.summary.on_by_default = on;
         }
@@ -149,27 +130,6 @@ pub fn save(changes: Changes) -> Result<(), String> {
             settings.summary.context_tokens = context;
         }
     })
-}
-
-/// Tokens in the prompt Whisper gets from these hints; `None` until the model is downloaded.
-pub fn count_hints(app: &AppHandle, hints: &str) -> Option<usize> {
-    let counter = app.state::<HintCounter>();
-    let mut vocab = lock(&counter.0);
-    // Every model Debrief offers has the same vocabulary, so any downloaded one will do.
-    let downloaded = MODELS
-        .iter()
-        .find(|model| model.is_downloaded().unwrap_or(false));
-    if vocab.is_none()
-        && let Some(model) = downloaded
-    {
-        let path = model.path().ok()?;
-        match Vocab::load(&path) {
-            Ok(loaded) => *vocab = Some(Arc::new(loaded)),
-            Err(error) => eprintln!("{error}"),
-        }
-    }
-    let prompt = hints::prompt(hints);
-    vocab.as_ref().map(|vocab| vocab.count(&prompt))
 }
 
 /// Asks for a folder and saves it. `None` when the picker was cancelled.
@@ -308,8 +268,4 @@ pub(crate) fn failed(error: ConfigError) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => text,
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

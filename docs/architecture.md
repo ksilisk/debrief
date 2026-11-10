@@ -15,9 +15,8 @@ Status: agreed plan, November 2026.
 | Windows / Linux capture | `cpal` plus WASAPI / PipeWire modules | Later (v0.3), same interface |
 | Audio files | `hound` writes WAV while recording | WAV survives a crash best. Compression (m4a or other) and sizes are decided later |
 | Resampling | `rubato` → 16 kHz mono for Whisper | |
-| Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal); large-v3-turbo by default, or its 5-bit version or large-v3; Silero VAD 5.1.2 (whisper.cpp's, built into the app) | One pass per track over its speech only (chosen in M0.3: on silence Whisper invents lines). Called through whisper.cpp's C API (`raw-api`), because whisper-rs can't set `carry_initial_prompt`, which keeps the names and terms in front of every 30-second window. Parakeet (`transcribe-rs`) is not tested yet |
+| Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal); large-v3-turbo by default, or its 5-bit version or large-v3; Silero VAD 5.1.2 (whisper.cpp's, built into the app) | One pass per track over its speech only (chosen in M0.3: on silence Whisper invents lines). Called through whisper.cpp's C API (`raw-api`), because whisper-rs has no wrapper for the speech detector. No names-and-terms prompt: it helped spelling a little but put names into unclear speech (M0.3). Parakeet (`transcribe-rs`) is not tested yet |
 | Model files | `reqwest` (blocking, native TLS) + `sha2` | Downloaded from Hugging Face with one click (New recording, Meeting or Settings) or `debrief model download`, into `~/Library/Application Support/io.github.ksilisk.debrief/models`. A stopped download continues from its `.part` file (HTTP range); the result is checked by size and SHA-256. The download first checks free space as Finder counts it (`volumeAvailableCapacityForImportantUsage`) |
-| Token counter | whisper.cpp's vocabulary, read from the model file's header | Counts “Names and terms” the way whisper.cpp splits them, without loading the model (limit: 223 tokens, half the text context less one) |
 | Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`); other providers later |
 | API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files |
 | Tauri plugins | global-shortcut, notification, dialog, opener, single-instance, log, clipboard-manager | Added with the features that need them; tray icon is built into Tauri |
@@ -106,12 +105,12 @@ Everything goes to the Trash, through NSFileManager rather than Finder (which wo
 
 The app's own files live in `~/Library/Application Support/io.github.ksilisk.debrief/`, never in Documents (which macOS may sync to iCloud):
 
-- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), names and terms and the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context, answer limit and whether new recordings write a summary, and the storage cleanup (what to delete and after how many days; never by default).
+- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context, answer limit and whether new recordings write a summary, and the storage cleanup (what to delete and after how many days; never by default).
 - `summary-prompt.txt`: the instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language.
 - `keys.json`: API keys by provider, created with mode 600 so only the owner can read it.
 - `models/`: the downloaded Whisper models; `settings.json` names the one in use (left out for the default). When a download finishes and the model in use isn't downloaded, Debrief switches to the new one. Meetings that couldn't be transcribed for want of a model are processed when a download finishes (only those from the running session; older ones have Process now).
 
-`debrief config summaries` asks for the provider and the key (hidden input), checks the key by listing the provider's models, and saves the choice. The app's Settings screen writes the same files: a key is saved only after Test connection lists the models with it, and the provider and model only once a model is chosen. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs. `debrief process --hints` overrides the names and terms for one run.
+`debrief config summaries` asks for the provider and the key (hidden input), checks the key by listing the provider's models, and saves the choice. The app's Settings screen writes the same files: a key is saved only after Test connection lists the models with it, and the provider and model only once a model is chosen. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs.
 
 ## Building and signing
 
