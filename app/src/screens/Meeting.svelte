@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ModelDownload from "../lib/components/ModelDownload.svelte";
+  import { chosenModel, type SpeechModels } from "../lib/models";
   import { onMount } from "svelte";
   import { clock, recordingDefaults, showInFinder } from "../lib/recording";
   import { renderMarkdown } from "../lib/markdown";
@@ -23,6 +25,8 @@
     progress,
     version,
     problems = [],
+    models,
+    onSettings,
   }: {
     folder: string;
     /** The live progress when this meeting is the one being processed. */
@@ -31,7 +35,11 @@
     version: number;
     /** What went wrong while saving the recording. */
     problems?: string[];
+    models: SpeechModels | null;
+    onSettings: () => void;
   } = $props();
+
+  const modelMissing = $derived(models !== null && chosenModel(models)?.downloaded === false);
 
   let details = $state<MeetingDetails | null>(null);
   let loadError = $state<string | null>(null);
@@ -236,6 +244,9 @@
       </button>
     </div>
   {:else if !transcribed}
+    {#if details.status !== "recording"}
+      <ModelDownload {models} {onSettings} />
+    {/if}
     <div class="empty">
       {#if details.status === "recording"}
         <b>This meeting is being recorded</b>
@@ -246,6 +257,8 @@
             {failure}
           {:else if details.status === "cutOff"}
             The recording was cut off when the app quit. Debrief repairs it first, then transcribes it.
+          {:else if modelMissing}
+            Debrief transcribes it as soon as a speech model is downloaded.
           {:else}
             Debrief transcribes it on this Mac and writes the files into the meeting folder.
           {/if}

@@ -20,8 +20,22 @@
   } from "../lib/settings";
   import { anyMissing, loadPermissions } from "../lib/permissions";
   import { checkForUpdates, installUpdate, type UpdateStatus } from "../lib/updates";
+  import {
+    cancelModelDownload,
+    chooseModel as useSpeechModel,
+    deleteModel,
+    downloadModel,
+    modelNames,
+    timeLeft,
+    type ModelInfo,
+    type SpeechModels,
+  } from "../lib/models";
 
-  let { onPermissions, update }: { onPermissions: () => void; update: UpdateStatus | null } = $props();
+  let {
+    onPermissions,
+    update,
+    speechModels,
+  }: { onPermissions: () => void; update: UpdateStatus | null; speechModels: SpeechModels | null } = $props();
 
   const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
   /** Names and terms are saved and counted once typing pauses this long, in milliseconds. */
@@ -224,6 +238,42 @@
     void save({ contextTokens }, (e) => (summaryError = e));
   }
 
+  let modelError = $state<string | null>(null);
+
+  // The token count needs a downloaded model; count again once one arrives.
+  $effect(() => {
+    if (hintTokens === null && speechModels?.models.some((model) => model.downloaded)) {
+      const text = hints;
+      countHintTokens(text)
+        .then((count) => {
+          if (text === hints) hintTokens = count;
+        })
+        .catch(() => {});
+    }
+  });
+
+  function modelState(model: ModelInfo): string {
+    const download = speechModels?.download;
+    if (download?.model === model.name) {
+      const percent = download.total > 0 ? Math.floor((download.done * 100) / download.total) : 0;
+      const left = timeLeft(download.secondsLeft);
+      return `Downloading · ${percent}%${left ? ` · ${left}` : ""}`;
+    }
+    if (model.name === speechModels?.chosen) return model.downloaded ? "In use" : "In use · not downloaded";
+    if (model.downloaded) return "Downloaded";
+    if (model.partialBytes > 0) return `${size(model.partialBytes)} of ${size(model.bytes)} downloaded`;
+    return "Not downloaded";
+  }
+
+  async function modelAction(action: () => Promise<void>) {
+    modelError = null;
+    try {
+      await action();
+    } catch (e) {
+      modelError = String(e);
+    }
+  }
+
   async function checkUpdates() {
     updateError = null;
     try {
@@ -316,21 +366,45 @@
 
     <section class="group">
       <h3>Transcription, on this Mac</h3>
-      <div class="row">
+      <div class="row top">
         <span class="k"
           >Model<InfoTip
             label="Transcription model"
-            text="Speech recognition runs on this Mac with this model. Audio is never sent anywhere."
+            text="Speech recognition runs on this Mac; audio is never sent anywhere. Larger models are more accurate but slower. Each model is downloaded once from Hugging Face."
           /></span
         >
-        <span class="v">
-          Whisper {view.whisper.name}
-          <span class="status">
-            {view.whisper.downloaded
-              ? `${size(view.whisper.bytes)} · downloaded`
-              : "Not downloaded. Run debrief model download in Terminal."}
-          </span>
-        </span>
+        <div class="models">
+          {#each speechModels?.models ?? [] as model (model.name)}
+            {@const busy = speechModels?.download?.model === model.name}
+            <div class="model" class:chosen={model.name === speechModels?.chosen}>
+              <span class="model-name">
+                <b>{modelNames[model.name]?.label ?? model.name}</b>
+                <span class="status">{size(model.bytes)} · {modelState(model)}</span>
+                <span class="note">{modelNames[model.name]?.note ?? ""}</span>
+              </span>
+              <span class="model-actions">
+                {#if busy}
+                  <button type="button" class="btn small" onclick={() => modelAction(cancelModelDownload)}>Stop</button>
+                {:else if !model.downloaded}
+                  <button
+                    type="button"
+                    class="btn small"
+                    disabled={speechModels?.download !== null}
+                    onclick={() => modelAction(() => downloadModel(model.name))}
+                  >
+                    {model.partialBytes > 0 ? "Resume download" : "Download"}
+                  </button>
+                {:else if model.name !== speechModels?.chosen}
+                  <button type="button" class="btn small" onclick={() => modelAction(() => useSpeechModel(model.name))}>Use</button>
+                  <button type="button" class="btn small" onclick={() => modelAction(() => deleteModel(model.name))}>Delete</button>
+                {/if}
+              </span>
+            </div>
+          {/each}
+          {#if modelError ?? speechModels?.error}
+            <p class="model-error">{modelError ?? speechModels?.error}</p>
+          {/if}
+        </div>
       </div>
       <div class="row">
         <span class="k"
@@ -559,6 +633,53 @@
     flex-wrap: wrap;
     min-width: 0;
     font-size: 13px;
+  }
+
+  .row.top {
+    align-items: start;
+  }
+
+  .models {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .model {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border-radius: 7px;
+    font-size: 13px;
+  }
+
+  .model.chosen {
+    background: var(--soft);
+  }
+
+  .model-name {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .note {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .model-actions {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
+
+  .model-error {
+    margin: 4px 8px 0;
+    font-size: 12px;
+    color: var(--rec);
   }
 
   .mono {

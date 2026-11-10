@@ -13,7 +13,7 @@ use debrief_core::summary::{self, Summarizer};
 use debrief_core::transcript::{TRANSCRIPT_FILE, Transcript};
 use debrief_summarize::{RemoteModel, config};
 use debrief_transcribe::Whisper;
-use debrief_transcribe::models::LARGE_V3_TURBO;
+use debrief_transcribe::models;
 
 use crate::format::{clock, size};
 use crate::repair::repair_if_needed;
@@ -47,10 +47,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             (path.clone(), name)
         }
         None => {
-            let model = LARGE_V3_TURBO;
+            let settings = config::Settings::load(&config::folder()?)?;
+            let model = models::chosen(settings.transcription.model.as_deref());
             if !model.is_downloaded()? {
                 bail!(
-                    "the Whisper model is not downloaded yet. Run `debrief model download` ({})",
+                    "the Whisper model {} is not downloaded yet. Run `debrief model download` ({})",
+                    model.name,
                     size(model.bytes)
                 );
             }

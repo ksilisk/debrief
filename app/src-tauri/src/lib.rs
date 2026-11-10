@@ -11,6 +11,7 @@ mod processing;
 mod recording;
 mod relaunch;
 mod settings;
+mod speech_models;
 mod tray;
 mod updates;
 mod window;
@@ -37,6 +38,7 @@ pub fn run() {
         .manage(processing::Queue::default())
         .manage(settings::HintCounter::default())
         .manage(updates::Updates::default())
+        .manage(speech_models::Downloads::default())
         .menu(app_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -85,6 +87,11 @@ pub fn run() {
             commands::update_status,
             commands::check_for_updates,
             commands::install_update,
+            commands::speech_models,
+            commands::download_model,
+            commands::cancel_model_download,
+            commands::choose_model,
+            commands::delete_model,
         ])
         .setup(|app| {
             let app = app.handle();

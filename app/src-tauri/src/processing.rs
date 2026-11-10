@@ -16,13 +16,12 @@ use debrief_core::repair::repair;
 use debrief_core::summary::Summarizer;
 use debrief_summarize::{RemoteModel, config};
 use debrief_transcribe::Whisper;
-use debrief_transcribe::models::LARGE_V3_TURBO;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::library::{self, SHOWN_STEPS, Status};
 use crate::phase::{self, Phase};
-use crate::{notify, recording, tray};
+use crate::{notify, recording, speech_models, tray};
 
 const PROGRESS: &str = "processing-progress";
 const FINISHED: &str = "processing-finished";
@@ -82,6 +81,9 @@ struct State {
     waiting: VecDeque<Job>,
     current: Option<(PathBuf, Progress)>,
     worker: bool,
+    /// Meetings that couldn't be transcribed because the model wasn't
+    /// downloaded; they are processed once a download finishes.
+    need_model: Vec<PathBuf>,
 }
 
 /// Kept in Tauri's managed state.
@@ -98,6 +100,14 @@ pub fn is_busy(app: &AppHandle) -> bool {
 
 pub fn process(app: &AppHandle, folder: &Path) {
     enqueue(app, folder, Kind::Process);
+}
+
+/// A model finished downloading: processes the meetings that were waiting for one.
+pub fn model_ready(app: &AppHandle) {
+    let folders = std::mem::take(&mut lock(&app.state::<Queue>().state).need_model);
+    for folder in folders {
+        enqueue(app, &folder, Kind::Process);
+    }
 }
 
 pub fn summarize(app: &AppHandle, folder: &Path) {
@@ -237,7 +247,15 @@ fn run(
             }
             let transcriber = match loaded(whisper) {
                 Ok(transcriber) => transcriber,
-                Err(problem) => return finished(Some(problem), false),
+                Err(Missing::Model(problem)) => {
+                    let queue = app.state::<Queue>();
+                    let mut state = lock(&queue.state);
+                    if !state.need_model.contains(folder) {
+                        state.need_model.push(folder.clone());
+                    }
+                    return finished(Some(problem), false);
+                }
+                Err(Missing::Other(problem)) => return finished(Some(problem), false),
             };
             transcriber.set_hints(&hints());
             tracker.progress.transcribe_model = transcriber.model().to_string();
@@ -274,20 +292,42 @@ fn run(
     }
 }
 
-/// The Whisper model, loaded the first time a job needs it.
-fn loaded(whisper: &mut Option<Whisper>) -> Result<&mut Whisper, String> {
+enum Missing {
+    /// The chosen model isn't downloaded.
+    Model(String),
+    Other(String),
+}
+
+/// The chosen Whisper model, loaded the first time a job needs it and again
+/// when another one is chosen.
+fn loaded(whisper: &mut Option<Whisper>) -> Result<&mut Whisper, Missing> {
+    let model = speech_models::chosen();
+    if whisper
+        .as_ref()
+        .is_some_and(|loaded| loaded.model() != model.name)
+    {
+        *whisper = None;
+    }
     if whisper.is_none() {
-        let model = LARGE_V3_TURBO;
-        let downloaded = model.is_downloaded().map_err(|error| error.to_string())?;
+        let downloaded = model
+            .is_downloaded()
+            .map_err(|error| Missing::Other(error.to_string()))?;
         if !downloaded {
-            return Err("The Whisper model is not downloaded yet. Run `debrief model download` in Terminal, then process the meeting again.".into());
+            return Err(Missing::Model(format!(
+                "The speech model {} isn't downloaded. Download it on the New recording screen or in Settings; the meeting is processed when it finishes.",
+                model.name
+            )));
         }
-        let path = model.path().map_err(|error| error.to_string())?;
-        *whisper = Some(Whisper::load(&path, model.name).map_err(|error| error.to_string())?);
+        let path = model
+            .path()
+            .map_err(|error| Missing::Other(error.to_string()))?;
+        *whisper = Some(
+            Whisper::load(&path, model.name).map_err(|error| Missing::Other(error.to_string()))?,
+        );
     }
     whisper
         .as_mut()
-        .ok_or_else(|| "Whisper did not load".into())
+        .ok_or_else(|| Missing::Other("Whisper did not load".into()))
 }
 
 /// Names and terms from Settings, read again for each meeting.
@@ -351,7 +391,7 @@ impl<'a> Tracker<'a> {
                 percent: 0,
                 seconds_left: None,
                 summary_characters: 0,
-                transcribe_model: LARGE_V3_TURBO.name.to_string(),
+                transcribe_model: speech_models::chosen().name.to_string(),
                 summary_model,
             },
             started: Instant::now(),

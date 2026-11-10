@@ -11,8 +11,20 @@
     type VideoSource,
   } from "../lib/recording";
   import { isMissing, loadPermissions, shortNames, type Permissions } from "../lib/permissions";
+  import ModelDownload from "../lib/components/ModelDownload.svelte";
+  import type { SpeechModels } from "../lib/models";
 
-  let { error = $bindable(), onPermissions }: { error: string | null; onPermissions: () => void } = $props();
+  let {
+    error = $bindable(),
+    onPermissions,
+    models,
+    onSettings,
+  }: {
+    error: string | null;
+    onPermissions: () => void;
+    models: SpeechModels | null;
+    onSettings: () => void;
+  } = $props();
 
   let title = $state("");
   /** "" uses the system default. */
@@ -48,7 +60,7 @@
     const names = permissionLine.filter((item) => item.dot === "warn").map((item) => shortNames[item.key]);
     if (names.length === 0) return null;
     const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-    return `${list} ${names.length === 1 ? "is" : "are"} not allowed.`;
+    return `${list} ${names.length === 1 ? "is" : "are"} not allowed`;
   });
 
   /** A remembered app that is not running now still works: its sound is recorded once it starts. */
@@ -281,10 +293,14 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
+  <ModelDownload {models} {onSettings} />
+
   {#if missingText}
     <div class="perm-alert" role="alert">
-      <span class="dot warn"></span>
-      <span><b>{missingText}</b> A recording can fail or miss a track.</span>
+      <div class="alert-text">
+        <b><span class="alert-dot"></span>{missingText}</b>
+        <span>A recording can fail or miss a track.</span>
+      </div>
       <button type="button" class="btn" onclick={onPermissions}>Fix permissions</button>
     </div>
   {/if}
@@ -492,23 +508,46 @@
   }
 
   .perm-alert {
-    display: flex;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 16px;
     align-items: center;
-    flex-wrap: wrap;
-    margin: 18px 0 0;
-    padding: 10px 12px;
-    border-radius: 8px;
+    margin: 14px 0 0;
+    padding: 12px 14px;
+    border-radius: 10px;
     border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
     background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  }
+
+  .alert-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .alert-text b {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: 13px;
   }
 
-  .perm-alert .btn {
-    margin-left: auto;
+  .alert-text span:not(.alert-dot) {
+    padding-left: 15px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .alert-dot {
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--warn);
   }
 
   .btn {
+    white-space: nowrap;
     padding: 6px 12px;
     border-radius: 8px;
     border: 1px solid var(--line);

@@ -124,6 +124,9 @@ pub struct Settings {
 pub struct TranscriptionSettings {
     /// Names and terms as typed, one or more per line.
     pub hints: String,
+    /// The Whisper model's name; `None` uses the default one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// The app's last choices on the New recording screen, used for the next one.

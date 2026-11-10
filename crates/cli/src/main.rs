@@ -28,7 +28,7 @@ enum Command {
     Record(record::Args),
     /// Transcribe a recorded meeting: both tracks, merged by time, echo lines marked.
     Process(process::Args),
-    /// Show or download the Whisper model.
+    /// List the Whisper models or download one.
     Model(model::Args),
     /// Write or rewrite the summary of a transcribed meeting.
     Summarize(summarize::Args),

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use debrief_summarize::config::{self, ConfigError, Keys, Provider, Settings, masked};
 use debrief_summarize::{chat_models, list_models};
 use debrief_transcribe::hints::{self, MAX_TOKENS, Vocab};
-use debrief_transcribe::models::LARGE_V3_TURBO;
+use debrief_transcribe::models::MODELS;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -28,16 +28,7 @@ pub struct View {
     /// `None` until the Whisper model is downloaded.
     pub hint_tokens: Option<usize>,
     pub max_hint_tokens: usize,
-    pub whisper: WhisperView,
     pub summary: SummaryView,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WhisperView {
-    pub name: String,
-    pub bytes: u64,
-    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,11 +100,6 @@ pub fn view(app: &AppHandle) -> Result<View, String> {
         hints: settings.transcription.hints,
         hint_tokens,
         max_hint_tokens: MAX_TOKENS,
-        whisper: WhisperView {
-            name: LARGE_V3_TURBO.name.to_string(),
-            bytes: LARGE_V3_TURBO.bytes,
-            downloaded: LARGE_V3_TURBO.is_downloaded().unwrap_or(false),
-        },
         summary: SummaryView {
             provider: summary.provider,
             model: summary.model,
@@ -151,8 +137,14 @@ pub fn save(changes: Changes) -> Result<(), String> {
 pub fn count_hints(app: &AppHandle, hints: &str) -> Option<usize> {
     let counter = app.state::<HintCounter>();
     let mut vocab = lock(&counter.0);
-    if vocab.is_none() && LARGE_V3_TURBO.is_downloaded().unwrap_or(false) {
-        let path = LARGE_V3_TURBO.path().ok()?;
+    // Every model Debrief offers has the same vocabulary, so any downloaded one will do.
+    let downloaded = MODELS
+        .iter()
+        .find(|model| model.is_downloaded().unwrap_or(false));
+    if vocab.is_none()
+        && let Some(model) = downloaded
+    {
+        let path = model.path().ok()?;
         match Vocab::load(&path) {
             Ok(loaded) => *vocab = Some(Arc::new(loaded)),
             Err(error) => eprintln!("{error}"),

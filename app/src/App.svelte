@@ -22,6 +22,7 @@
   import Permissions from "./screens/Permissions.svelte";
   import { anyMissing, isMissing, loadPermissions, meetingsFolderAccess } from "./lib/permissions";
   import { installUpdate, updateEvent, updateStatus, type UpdateStatus } from "./lib/updates";
+  import { loadSpeechModels, speechModelsEvent, type SpeechModels } from "./lib/models";
 
   let screen = $state<Screen>("new");
   let live = $state<Live | null>(null);
@@ -33,6 +34,7 @@
   let progress = $state<Progress | null>(null);
   /** Goes up whenever meetings change, so an open meeting loads again. */
   let version = $state(0);
+  let models = $state<SpeechModels | null>(null);
   let update = $state<UpdateStatus | null>(null);
   let updateError = $state<string | null>(null);
   /** An update can't be installed during a recording or processing. */
@@ -42,6 +44,14 @@
 
   /** New recording and Recording share one place: a running recording decides which one shows. */
   const shown = $derived<Screen>(screen === "new" || screen === "recording" ? (live ? "recording" : "new") : screen);
+
+  // Model files can change outside Debrief, so each screen starts from a fresh look.
+  $effect(() => {
+    void shown;
+    loadSpeechModels()
+      .then((current) => (models = current))
+      .catch(() => {});
+  });
 
   /** The list without the live recording, which has its own item, grouped by day. */
   const groups = $derived.by(() => {
@@ -119,6 +129,7 @@
       }),
       listen(meetingEvents.changed, () => void refresh()),
       listen<UpdateStatus>(updateEvent, (event) => (update = event.payload)),
+      listen<SpeechModels>(speechModelsEvent, (event) => (models = event.payload)),
       listen<Progress>(meetingEvents.progress, (event) => {
         const stepChanged = JSON.stringify(event.payload.steps) !== JSON.stringify(progress?.steps);
         progress = event.payload;
@@ -142,6 +153,9 @@
     void checkPermissions();
     updateStatus()
       .then((current) => (update = current))
+      .catch(() => {});
+    loadSpeechModels()
+      .then((current) => (models = current))
       .catch(() => {});
 
     return () => {
@@ -256,7 +270,7 @@
 
     <main class="pane">
       {#if shown === "new"}
-        <NewRecording bind:error onPermissions={() => (screen = "permissions")} />
+        <NewRecording bind:error onPermissions={() => (screen = "permissions")} {models} onSettings={() => (screen = "settings")} />
       {:else if shown === "recording" && live}
         <Recording {live} {status} {stopping} />
       {:else if shown === "meeting" && selected}
@@ -265,9 +279,11 @@
           progress={progress?.folder === selected ? progress : null}
           {version}
           problems={saveProblems[selected] ?? []}
+          {models}
+          onSettings={() => (screen = "settings")}
         />
       {:else if shown === "settings"}
-        <Settings onPermissions={() => (screen = "permissions")} {update} />
+        <Settings onPermissions={() => (screen = "permissions")} {update} speechModels={models} />
       {:else if shown === "permissions"}
         <Permissions onDone={() => (screen = "new")} />
       {:else}

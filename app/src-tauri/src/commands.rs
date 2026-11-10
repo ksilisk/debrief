@@ -13,6 +13,7 @@ use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
 use crate::relaunch;
 use crate::settings::{self, Changes, ModelChoice, ModelView, View};
+use crate::speech_models;
 use crate::updates;
 
 #[tauri::command]
@@ -213,6 +214,32 @@ pub async fn check_for_updates(app: AppHandle) -> updates::Status {
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
     updates::install(&app).await
+}
+
+#[tauri::command]
+pub async fn speech_models(app: AppHandle) -> Result<speech_models::View, String> {
+    blocking(move || Ok(speech_models::view(&app))).await
+}
+
+/// Starts the download; `speech-models` events follow it.
+#[tauri::command]
+pub fn download_model(app: AppHandle, name: String) -> Result<(), String> {
+    speech_models::download(&app, &name)
+}
+
+#[tauri::command]
+pub fn cancel_model_download(app: AppHandle) {
+    speech_models::cancel(&app);
+}
+
+#[tauri::command]
+pub async fn choose_model(app: AppHandle, name: String) -> Result<(), String> {
+    blocking(move || speech_models::choose(&app, &name)).await
+}
+
+#[tauri::command]
+pub async fn delete_model(app: AppHandle, name: String) -> Result<(), String> {
+    blocking(move || speech_models::delete(&app, &name)).await
 }
 
 async fn blocking<T: Send + 'static>(
