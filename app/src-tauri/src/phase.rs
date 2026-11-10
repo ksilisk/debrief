@@ -17,7 +17,8 @@ pub enum Phase {
         title: String,
         /// The step that runs now, such as "Transcribing".
         step: String,
-        percent: u8,
+        /// `None` while writing a summary, which has no percent to show.
+        percent: Option<u8>,
     },
 }
 

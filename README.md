@@ -5,8 +5,8 @@ Record a meeting, get a transcript, and optionally a short summary, as plain fil
 - **Two tracks:** your microphone (“Me”) and the sound of the call (“Them”) are recorded separately, so the transcript knows who spoke.
 - **Optional screen video** at 5 or 10 fps, from a whole screen or one window.
 - **On-device transcription** with Whisper. Audio and video never leave your computer.
-- **Optional summaries** through any OpenAI-compatible API: a local server (Ollama, LM Studio, llama.cpp), OpenAI, Claude or OpenRouter.
-- **Plain files:** `transcript.txt`, `transcript.md`, `transcript.srt`, and `summary.txt` / `summary.md` when summaries are on.
+- **Summaries on request**, with a prompt you can change per meeting, through any OpenAI-compatible API: a local server (Ollama, LM Studio, llama.cpp), OpenAI, Claude or OpenRouter.
+- **Plain files:** `transcript.txt`, `transcript.md`, `transcript.srt`, and `summary.txt` / `summary.md` once you write a summary.
 
 > **Status:** early development. Nothing is usable yet. macOS 15 or later first; Windows and Linux are planned.
 

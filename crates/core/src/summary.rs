@@ -1,6 +1,8 @@
-//! Summaries: the transcript and the user's prompt go to a language model.
+//! Summaries: the transcript and a prompt go to a language model. The prompt is
+//! the default from Settings, or the meeting's own in `summary-prompt.txt`.
 
 use std::error::Error;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -12,6 +14,8 @@ use crate::transcript::Transcript;
 
 pub const MARKDOWN_FILE: &str = "summary.md";
 pub const TEXT_FILE: &str = "summary.txt";
+/// The meeting's own prompt, when it has one.
+pub const PROMPT_FILE: &str = "summary-prompt.txt";
 
 /// On the low side on purpose: Russian takes more tokens per word than English.
 const CHARS_PER_TOKEN: usize = 3;
@@ -29,7 +33,7 @@ pub trait Summarizer: Send {
     /// Saved with the step, for example `anthropic claude-opus-5-5`.
     fn model(&self) -> &str;
 
-    /// The user's instructions.
+    /// The default prompt, from Settings.
     fn prompt(&self) -> &str;
 
     /// How many tokens the model reads at once.
@@ -42,6 +46,7 @@ pub trait Summarizer: Send {
     /// received so far; stop when `cancelled` is set.
     fn summarize(
         &mut self,
+        prompt: &str,
         transcript: &str,
         on_text: &mut dyn FnMut(usize),
         cancelled: &AtomicBool,
@@ -60,6 +65,22 @@ pub struct TooLong {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum PromptError {
+    #[error("could not read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not save {}: {source}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("could not write {}: {source}", path.display())]
 pub struct WriteError {
     path: PathBuf,
@@ -72,8 +93,12 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// A rough check before sending, so a long meeting fails at once with a clear reason.
-pub fn check_fits(summarizer: &dyn Summarizer, transcript: &str) -> Result<(), TooLong> {
-    let needed = estimate_tokens(summarizer.prompt()) + estimate_tokens(transcript);
+pub fn check_fits(
+    summarizer: &dyn Summarizer,
+    prompt: &str,
+    transcript: &str,
+) -> Result<(), TooLong> {
+    let needed = estimate_tokens(prompt) + estimate_tokens(transcript);
     let available = summarizer
         .context_tokens()
         .saturating_sub(summarizer.answer_tokens());
@@ -81,6 +106,32 @@ pub fn check_fits(summarizer: &dyn Summarizer, transcript: &str) -> Result<(), T
         Err(TooLong { needed, available })
     } else {
         Ok(())
+    }
+}
+
+/// The meeting's own prompt; `None` when it uses the default.
+pub fn own_prompt(folder: &Path) -> Result<Option<String>, PromptError> {
+    let path = folder.join(PROMPT_FILE);
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text.trim().to_string()).filter(|text| !text.is_empty())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(PromptError::Read { path, source }),
+    }
+}
+
+/// Saves the meeting's own prompt, or removes it with `None` or an empty text.
+pub fn set_own_prompt(folder: &Path, prompt: Option<&str>) -> Result<(), PromptError> {
+    let path = folder.join(PROMPT_FILE);
+    let write_error = |source| PromptError::Write {
+        path: path.clone(),
+        source,
+    };
+    match prompt.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => write_atomically(&path, format!("{text}\n").as_bytes()).map_err(write_error),
+        None => match fs::remove_file(&path) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(write_error(error)),
+            _ => Ok(()),
+        },
     }
 }
 
@@ -167,6 +218,7 @@ mod tests {
         fn summarize(
             &mut self,
             _: &str,
+            _: &str,
             _: &mut dyn FnMut(usize),
             _: &AtomicBool,
         ) -> Result<String, SummarizeError> {
@@ -180,14 +232,29 @@ mod tests {
             prompt: "p".repeat(30),
             context: 1_100,
         };
-        assert_eq!(check_fits(&summarizer, &"я".repeat(2_970)), Ok(()));
+        let prompt = summarizer.prompt().to_string();
+        assert_eq!(check_fits(&summarizer, &prompt, &"я".repeat(2_970)), Ok(()));
         assert_eq!(
-            check_fits(&summarizer, &"я".repeat(3_000)),
+            check_fits(&summarizer, &prompt, &"я".repeat(3_000)),
             Err(TooLong {
                 needed: 1_010,
                 available: 1_000
             })
         );
+    }
+
+    #[test]
+    fn a_meeting_keeps_its_own_prompt_until_it_is_removed() {
+        let folder = crate::testing::temp_folder("own-prompt");
+        assert_eq!(own_prompt(&folder).expect("read"), None);
+        set_own_prompt(&folder, Some("  List the decisions.\n")).expect("save");
+        assert_eq!(
+            own_prompt(&folder).expect("read").as_deref(),
+            Some("List the decisions.")
+        );
+        set_own_prompt(&folder, Some("   ")).expect("remove");
+        assert!(!folder.join(PROMPT_FILE).exists());
+        set_own_prompt(&folder, None).expect("remove again");
     }
 
     #[test]

@@ -47,14 +47,6 @@ fn show() -> anyhow::Result<()> {
                     .map(masked)
                     .unwrap_or_else(|| "not saved".into())
             );
-            println!(
-                "  new recordings  {}",
-                if settings.on_by_default {
-                    "write a summary"
-                } else {
-                    "transcript only"
-                }
-            );
         }
     }
     println!("Files");
@@ -151,20 +143,11 @@ fn set_up_summaries() -> anyhow::Result<()> {
     };
     let answer_tokens = info.map_or(DEFAULT_ANSWER_TOKENS, |m| m.answer_limit());
 
-    let default_on = if current.on_by_default { "y" } else { "n" };
-    let on_by_default = ask(
-        "Write summaries for new recordings? (y or n)",
-        Some(default_on),
-    )?
-    .to_lowercase()
-    .starts_with('y');
-
     settings.summary = SummarySettings {
         provider: Some(provider),
         model: model.clone(),
         context_tokens,
         answer_tokens,
-        on_by_default,
     };
     settings.save(&folder)?;
     config::prompt(&folder)?;

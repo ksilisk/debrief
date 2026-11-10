@@ -7,6 +7,7 @@ export type Status =
   | "recording"
   | "processing"
   | "waiting"
+  | "summarizing"
   | "ready"
   | "transcriptOnly"
   | "notProcessed"
@@ -45,8 +46,11 @@ export interface MeetingDetails extends MeetingItem {
   language: string;
   heard: string[];
   steps: StepView[];
-  summariesOn: boolean;
   summary: string | null;
+  /** The meeting's own summary prompt; null when it uses the default. */
+  ownPrompt: string | null;
+  /** The prompt from Settings. */
+  defaultPrompt: string;
   segments: Segment[];
   marks: number[];
   files: { name: string; bytes: number }[];
@@ -65,6 +69,8 @@ export interface Progress {
   summaryCharacters: number;
   transcribeModel: string;
   summaryModel: string | null;
+  /** The job writes the summary only. */
+  summaryOnly: boolean;
 }
 
 export interface Finished {
@@ -85,7 +91,9 @@ export const meetingEvents = {
 export const listMeetings = () => invoke<MeetingItem[]>("meetings");
 export const meetingDetails = (folder: string) => invoke<MeetingDetails>("meeting", { folder });
 export const processMeeting = (folder: string) => invoke<void>("process_meeting", { folder });
-export const writeSummary = (folder: string) => invoke<void>("write_summary", { folder });
+/** `prompt` becomes the meeting's own; null makes it use the default again. */
+export const writeSummary = (folder: string, prompt: string | null) =>
+  invoke<void>("write_summary", { folder, prompt });
 export const stopProcessing = (folder: string) => invoke<void>("stop_processing", { folder });
 export const processingProgress = () => invoke<Progress | null>("processing_progress");
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
@@ -96,6 +104,7 @@ export const statusLabels: Record<Status, string> = {
   recording: "Recording",
   processing: "Processing",
   waiting: "Waiting",
+  summarizing: "Writing summary",
   ready: "Ready",
   transcriptOnly: "Transcript only",
   notProcessed: "Not processed",

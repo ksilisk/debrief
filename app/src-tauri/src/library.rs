@@ -21,6 +21,8 @@ pub enum Status {
     Recording,
     Processing,
     Waiting,
+    /// A summary is being written, or waits for another meeting to finish.
+    Summarizing,
     Ready,
     TranscriptOnly,
     NotProcessed,
@@ -52,9 +54,12 @@ pub struct Details {
     /// The languages Whisper heard, such as `["ru", "en"]`.
     pub heard: Vec<String>,
     pub steps: Vec<StepView>,
-    pub summaries_on: bool,
     /// The summary in Markdown, when there is one.
     pub summary: Option<String>,
+    /// The meeting's own summary prompt; `None` when it uses the default.
+    pub own_prompt: Option<String>,
+    /// The prompt from Settings.
+    pub default_prompt: String,
     pub segments: Vec<SegmentView>,
     pub marks: Vec<f64>,
     pub files: Vec<FileView>,
@@ -89,9 +94,10 @@ pub struct FileView {
 pub const SHOWN_STEPS: [Step; 4] = [Step::Transcribe, Step::Merge, Step::Export, Step::Summary];
 
 /// Files in the order the Files tab lists them; anything else comes after.
-const FILE_ORDER: [&str; 10] = [
+const FILE_ORDER: [&str; 11] = [
     summary::MARKDOWN_FILE,
     summary::TEXT_FILE,
+    summary::PROMPT_FILE,
     MARKDOWN_FILE,
     TEXT_FILE,
     SUBTITLES_FILE,
@@ -150,8 +156,11 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Resul
                 }
             })
             .collect(),
-        summaries_on: meeting.settings.summary,
         summary: fs::read_to_string(folder.join(summary::MARKDOWN_FILE)).ok(),
+        own_prompt: summary::own_prompt(folder).map_err(|error| error.to_string())?,
+        default_prompt: config::folder()
+            .and_then(|app_folder| config::prompt(&app_folder))
+            .map_err(|error| error.to_string())?,
         segments: transcript
             .map(|transcript| {
                 transcript

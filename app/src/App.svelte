@@ -91,7 +91,7 @@
 
   async function meetingMenu(event: MouseEvent, item: MeetingItem) {
     event.preventDefault();
-    const busy = item.status === "processing" || item.status === "waiting";
+    const busy = item.status === "processing" || item.status === "waiting" || item.status === "summarizing";
     try {
       const menu = await Menu.new({
         items: [
@@ -517,7 +517,8 @@
     border-color: color-mix(in srgb, var(--ok) 40%, transparent);
   }
 
-  .chip.processing {
+  .chip.processing,
+  .chip.summarizing {
     color: var(--me);
     border-color: color-mix(in srgb, var(--me) 40%, transparent);
     font-variant-numeric: tabular-nums;

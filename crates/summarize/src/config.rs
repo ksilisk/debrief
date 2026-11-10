@@ -189,9 +189,6 @@ pub struct SummarySettings {
     /// The most the answer may take, thinking included.
     #[serde(default = "default_answer")]
     pub answer_tokens: usize,
-    /// Whether new recordings write a summary.
-    #[serde(default)]
-    pub on_by_default: bool,
 }
 
 fn default_context() -> usize {
@@ -209,7 +206,6 @@ impl Default for SummarySettings {
             model: String::new(),
             context_tokens: DEFAULT_CONTEXT_TOKENS,
             answer_tokens: DEFAULT_ANSWER_TOKENS,
-            on_by_default: false,
         }
     }
 }
@@ -395,7 +391,7 @@ mod tests {
         )
         .expect("write");
         let settings = Settings::load(&folder).expect("load");
-        assert!(settings.summary.on_by_default);
+        assert_eq!(settings.summary.model, "gpt-5");
         assert_eq!(settings.recording, RecordingSettings::default());
         assert_eq!(settings.transcription, TranscriptionSettings::default());
         assert_eq!(settings.cleanup.rule(), None);

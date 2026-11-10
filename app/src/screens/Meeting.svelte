@@ -1,9 +1,11 @@
 <script lang="ts">
+  import InfoTip from "../lib/components/InfoTip.svelte";
   import ModelDownload from "../lib/components/ModelDownload.svelte";
   import { chosenModel, type SpeechModels } from "../lib/models";
   import { onMount } from "svelte";
   import { clock, recordingDefaults, showInFinder } from "../lib/recording";
   import { renderMarkdown } from "../lib/markdown";
+  import { providers } from "../lib/settings";
   import {
     copyText,
     duration,
@@ -49,6 +51,10 @@
   let showEcho = $state(false);
   let copied = $state(false);
   let summaryModel = $state<string | null>(null);
+  let summaryHost = $state<string | null>(null);
+  /** The prompt editor is open, with this text. */
+  let editing = $state(false);
+  let promptText = $state("");
 
   $effect(() => {
     void load(folder, version);
@@ -59,11 +65,15 @@
     void folder;
     tab = "summary";
     showEcho = false;
+    editing = false;
   });
 
   onMount(() => {
     recordingDefaults()
-      .then((defaults) => (summaryModel = defaults.summaryModel))
+      .then((defaults) => {
+        summaryModel = defaults.summaryModel;
+        summaryHost = providers.find((provider) => provider.id === defaults.summaryProvider)?.host ?? null;
+      })
       .catch(() => {
         // Opened in a plain browser (npm run dev) instead of the Tauri window.
       });
@@ -99,7 +109,10 @@
   }
 
   const busy = $derived(details?.status === "processing" || details?.status === "waiting");
-  const transcribed = $derived(details?.status === "ready" || details?.status === "transcriptOnly");
+  const summarizing = $derived(details?.status === "summarizing");
+  const transcribed = $derived(
+    details?.status === "ready" || details?.status === "transcriptOnly" || details?.status === "summarizing",
+  );
   const stepOf = (step: Step) => details?.steps.find((entry) => entry.step === step);
   const summaryFailed = $derived(stepOf("summary")?.status === "failed");
   const failure = $derived(details?.steps.find((entry) => entry.status === "failed")?.error ?? null);
@@ -149,17 +162,33 @@
     return `${track} · ${Math.round(progress.trackDone * 100)}%${timeLeft(progress.secondsLeft)} · ${model}`;
   }
 
-  function summaryDetail(): string {
-    const status = statusOf("summary");
-    if (status === "skipped") return "Summaries are off for this meeting";
-    const model = progress?.summaryModel ?? summaryModel;
-    if (status === "running") return `${progress?.summaryCharacters ?? 0} characters so far${model ? ` · ${model}` : ""}`;
-    return model ?? "Summaries are not set up";
+  const writingStatus = $derived(
+    progress?.summaryOnly
+      ? `Writing the summary · ${progress.summaryCharacters.toLocaleString("en")} characters`
+      : "Waiting for another meeting to finish processing",
+  );
+  const promptIsDefault = $derived(promptText.trim() === (details?.defaultPrompt ?? "").trim());
+
+  function editPrompt() {
+    promptText = details?.ownPrompt ?? details?.defaultPrompt ?? "";
+    editing = true;
+  }
+
+  /** `prompt` becomes the meeting's own; null uses the default. */
+  async function write(prompt: string | null) {
+    await run(() => writeSummary(folder, prompt));
+    if (!actionError) editing = false;
+  }
+
+  function writeWithPrompt() {
+    const text = promptText.trim();
+    void write(text === "" || promptIsDefault ? null : text);
   }
 
   const fileNotes: Record<string, string> = {
     "summary.md": "Same summary with headings",
     "summary.txt": "For people who don’t use Markdown",
+    "summary-prompt.txt": "This meeting’s own summary prompt",
     "transcript.md": "Me and Them with timecodes",
     "transcript.txt": "Plain text for anyone",
     "transcript.srt": "Subtitles for screen.mp4",
@@ -239,10 +268,6 @@
         <span class="st"></span>
         <div><b>Saving the transcript files</b><span class="d">Into the meeting folder</span></div>
       </li>
-      <li class={statusOf("summary")}>
-        <span class="st"></span>
-        <div><b>Writing the summary</b><span class="d">{summaryDetail()}</span></div>
-      </li>
     </ol>
     <p class="sub">You can close the window. Processing continues, and a notification tells you when the files are ready.</p>
     <div class="ctrls">
@@ -284,24 +309,75 @@
 
     {#if tab === "summary"}
       <div role="tabpanel">
+        {#if editing}
+          <div class="pedit">
+            <span class="phead"
+              ><label for="prompt">Prompt for this meeting</label><InfoTip
+                label="Prompt for this meeting"
+                text="Only this meeting uses it; the default in Settings stays as it is. Add who took part, names and products, or what to focus on. The current summary stays until the new one is ready."
+              /></span
+            >
+            <textarea id="prompt" bind:value={promptText} spellcheck="false"></textarea>
+            <div class="pbtns">
+              <button type="button" class="btn primary small" onclick={writeWithPrompt}>
+                {details.summary ? "Rewrite summary" : "Write summary"}
+              </button>
+              <button type="button" class="btn small" onclick={() => (editing = false)}>Cancel</button>
+              {#if !promptIsDefault}
+                <button type="button" class="btn small link" onclick={() => (promptText = details?.defaultPrompt ?? "")}>
+                  Back to the default
+                </button>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <div class="pline">
+            <span class="k">Prompt</span>
+            {#if details.ownPrompt}
+              <span class="pbadge">This meeting’s own</span>
+            {:else}
+              <span>Default</span>
+            {/if}
+            <InfoTip
+              label="Prompt"
+              text="The instructions the summary is written with. Default is the prompt from Settings. A meeting can have its own, and only that meeting uses it."
+            />
+            <span class="grow"></span>
+            {#if summarizing}
+              <span class="status" aria-live="polite">{writingStatus}</span>
+              <button type="button" class="btn small" onclick={() => run(() => stopProcessing(folder))}>Stop</button>
+            {:else if summaryModel}
+              <button type="button" class="btn small" onclick={editPrompt}>
+                {details.ownPrompt ? "Edit" : "Change for this meeting"}
+              </button>
+            {/if}
+          </div>
+        {/if}
         {#if details.summary}
+          {#if summaryFailed && !summarizing}
+            <p class="note warn">The new summary was not written: {stepOf("summary")?.error ?? "writing it failed."}</p>
+          {/if}
           <!-- renderMarkdown escapes the text and adds only its own tags. -->
           <div class="sumdoc">{@html renderMarkdown(details.summary)}</div>
-        {:else}
+        {:else if !editing && !summarizing}
           <div class="empty">
-            <b>{summaryFailed ? "The summary was not written" : "No summary for this meeting"}</b>
+            <b>{summaryFailed ? "The summary was not written" : "No summary yet"}</b>
             <p>
               {#if summaryFailed}
                 {stepOf("summary")?.error ?? "Writing it failed."}
+              {:else if summaryModel}
+                Write one when you need it, with the prompt shown above.
+                {summaryHost ? `The transcript text goes to ${summaryHost}.` : ""}
               {:else}
-                Summaries were off when it was recorded. The transcript{details.filesDeletedAt ? "" : " and audio"}
-                {details.filesDeletedAt ? "is" : "are"} in the meeting folder.
+                Summaries are not set up yet.
               {/if}
             </p>
             {#if summaryModel}
-              <button type="button" class="btn" onclick={() => run(() => writeSummary(folder))}>Write summary now</button>
+              <button type="button" class="btn primary" onclick={() => write(details?.ownPrompt ?? null)}>
+                {summaryFailed ? "Try again" : "Write summary"}
+              </button>
             {:else}
-              <p>Summaries are not set up yet. Run <code>debrief config summaries</code> in Terminal first.</p>
+              <button type="button" class="btn" onclick={onSettings}>Set up in Settings</button>
             {/if}
           </div>
         {/if}
@@ -546,6 +622,84 @@
     margin-top: 20px;
   }
 
+  /* Summary prompt */
+  .pline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    max-width: 64ch;
+    margin-bottom: 18px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .pline .k {
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .pline .grow {
+    flex: 1;
+  }
+
+  .pline .status {
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pbadge {
+    padding: 1px 8px;
+    border: 1px solid color-mix(in srgb, var(--me) 40%, transparent);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--me);
+  }
+
+  .pedit {
+    display: grid;
+    gap: 8px;
+    max-width: 64ch;
+    margin-bottom: 18px;
+  }
+
+  .phead {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .pedit textarea {
+    width: 100%;
+    min-height: 220px;
+    padding: 8px 10px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    font: 12px/1.55 var(--font-mono);
+  }
+
+  .pbtns {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .btn.link {
+    border-color: transparent;
+    background: transparent;
+    color: var(--me);
+  }
+
   /* Empty states */
   .empty {
     display: grid;
@@ -562,11 +716,6 @@
     margin: 0;
     font-size: 13px;
     color: var(--muted);
-  }
-
-  code {
-    font: 12px var(--font-mono);
-    color: var(--ink);
   }
 
   /* Tabs */

@@ -12,7 +12,7 @@ use chrono::Local;
 use debrief_capture::{Capture, CaptureError, Options, SystemAudio, Video, VideoTarget};
 use debrief_core::meeting::{self, Language, Meeting, Settings, VIDEO_FILE, VideoFile};
 use debrief_core::recorder::{Recorder, RecorderError, Status};
-use debrief_summarize::config::{self, RecordingSettings};
+use debrief_summarize::config::{self, Provider, RecordingSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -41,7 +41,6 @@ pub struct Choices {
     /// `None` records the main screen.
     pub video_source: Option<VideoSource>,
     pub language: Language,
-    pub summary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,9 +60,9 @@ pub struct Defaults {
     pub fps: u32,
     pub video_source: Option<VideoSource>,
     pub language: Language,
-    pub summary: bool,
     /// The model that writes summaries; `None` until summaries are set up.
     pub summary_model: Option<String>,
+    pub summary_provider: Option<Provider>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,8 +168,8 @@ pub fn defaults() -> Defaults {
         fps: recording.fps,
         video_source: recording.screen.map(VideoSource::Screen),
         language: recording.language,
-        summary: settings.summary.on_by_default && summary_model.is_some(),
         summary_model,
+        summary_provider: settings.summary.provider,
     }
 }
 
@@ -234,7 +233,6 @@ pub fn start_with_defaults(app: &AppHandle) {
         fps: defaults.fps,
         video_source: defaults.video_source,
         language: defaults.language,
-        summary: defaults.summary,
     };
     if let Err(message) = start(app, choices) {
         crate::window::show(app, Some(crate::window::Screen::New));
@@ -271,7 +269,6 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
         pressed_at,
         Settings {
             language: choices.language,
-            summary: choices.summary,
         },
     );
     draft.video = choices.video.then(|| VideoFile {

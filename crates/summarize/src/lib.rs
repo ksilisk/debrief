@@ -95,6 +95,7 @@ pub struct RemoteModel {
     /// Provider and id, saved with the step.
     model: String,
     key: String,
+    /// The default prompt, from `summary-prompt.txt` in the app's folder.
     prompt: String,
     context_tokens: usize,
     answer_tokens: usize,
@@ -147,6 +148,7 @@ impl Summarizer for RemoteModel {
 
     fn summarize(
         &mut self,
+        prompt: &str,
         transcript: &str,
         on_text: &mut dyn FnMut(usize),
         cancelled: &AtomicBool,
@@ -156,7 +158,7 @@ impl Summarizer for RemoteModel {
                 &self.client,
                 &self.key,
                 &self.model_id,
-                &self.prompt,
+                prompt,
                 transcript,
                 on_text,
                 cancelled,
@@ -166,7 +168,7 @@ impl Summarizer for RemoteModel {
                 &self.key,
                 &self.model_id,
                 self.answer_tokens,
-                &self.prompt,
+                prompt,
                 transcript,
                 on_text,
                 cancelled,

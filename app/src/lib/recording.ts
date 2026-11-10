@@ -17,12 +17,12 @@ export interface Choices {
   /** null records the main screen. */
   videoSource: VideoSource | null;
   language: Language;
-  summary: boolean;
 }
 
 export interface Defaults extends Omit<Choices, "title"> {
   /** null until summaries are set up. */
   summaryModel: string | null;
+  summaryProvider: "openai" | "anthropic" | null;
 }
 
 export interface Choice<T> {

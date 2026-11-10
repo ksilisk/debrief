@@ -58,6 +58,8 @@ pub struct Progress {
     pub summary_characters: usize,
     pub transcribe_model: String,
     pub summary_model: Option<String>,
+    /// The job writes the summary only.
+    pub summary_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,21 +142,30 @@ pub fn stop(app: &AppHandle, folder: &Path) {
     emit(app, MEETINGS_CHANGED, ());
 }
 
-/// `Processing` or `Waiting` for a meeting in the queue.
+/// `Processing`, `Waiting` or `Summarizing` for a meeting in the queue.
 pub fn status_of(app: &AppHandle, folder: &Path) -> Option<Status> {
     let folder = canonical(folder);
     let queue = app.state::<Queue>();
     let state = lock(&queue.state);
-    if state
+    if let Some((_, progress)) = state
         .current
         .as_ref()
-        .is_some_and(|(current, _)| *current == folder)
+        .filter(|(current, _)| *current == folder)
     {
-        Some(Status::Processing)
-    } else if state.waiting.iter().any(|job| job.folder == folder) {
-        Some(Status::Waiting)
+        Some(if progress.summary_only {
+            Status::Summarizing
+        } else {
+            Status::Processing
+        })
     } else {
-        None
+        state
+            .waiting
+            .iter()
+            .find(|job| job.folder == folder)
+            .map(|job| match job.kind {
+                Kind::Process => Status::Waiting,
+                Kind::Summarize => Status::Summarizing,
+            })
     }
 }
 
@@ -207,7 +218,7 @@ fn work(app: &AppHandle) {
         let finished = run(app, &job, &mut whisper, &queue.cancelled);
         lock(&queue.state).current = None;
         if finished.problem.is_none() && !finished.cancelled {
-            notify::meeting_ready(app, &finished.title);
+            notify::meeting_ready(app, &finished.title, job.kind == Kind::Summarize);
         }
         emit(app, FINISHED, finished);
         emit(app, MEETINGS_CHANGED, ());
@@ -235,14 +246,18 @@ fn run(
         cancelled,
     };
 
-    let (mut summarizer, setup_problem) = match RemoteModel::from_settings() {
-        Ok(model) => (model, None),
-        Err(error) => (None, Some(error.to_string())),
+    let (mut summarizer, setup_problem) = match job.kind {
+        Kind::Process => (None, None),
+        Kind::Summarize => match RemoteModel::from_settings() {
+            Ok(model) => (model, None),
+            Err(error) => (None, Some(error.to_string())),
+        },
     };
     let mut tracker = Tracker::new(
         app,
         folder,
         &title,
+        job.kind,
         summarizer.as_ref().map(|model| model.model().to_string()),
     );
     tracker.send(true);
@@ -266,15 +281,9 @@ fn run(
                 Err(Missing::Other(problem)) => return finished(Some(problem), false),
             };
             tracker.progress.transcribe_model = transcriber.model().to_string();
-            process::process(
-                folder,
-                transcriber,
-                summarizer
-                    .as_mut()
-                    .map(|model| model as &mut dyn Summarizer),
-                cancelled,
-                &mut |event| tracker.event(event),
-            )
+            process::process(folder, transcriber, cancelled, &mut |event| {
+                tracker.event(event)
+            })
         }
         Kind::Summarize => match summarizer.as_mut() {
             Some(model) => {
@@ -287,13 +296,10 @@ fn run(
         Ok(_) => finished(None, false),
         Err(ProcessError::Cancelled) => finished(None, true),
         Err(ProcessError::NoSummaryProvider) => {
-            let reason = setup_problem.unwrap_or_else(|| "summaries are not set up".into());
-            finished(
-                Some(format!(
-                    "The transcript is saved, but no summary was written: {reason}."
-                )),
-                false,
-            )
+            let reason = setup_problem.unwrap_or_else(|| {
+                "summaries are not set up; choose a provider in Settings".into()
+            });
+            finished(Some(format!("No summary was written: {reason}.")), false)
         }
         Err(error) => finished(Some(capitalized(&error.to_string())), false),
     }
@@ -361,16 +367,22 @@ struct Tracker<'a> {
 }
 
 impl<'a> Tracker<'a> {
-    fn new(app: &'a AppHandle, folder: &Path, title: &str, summary_model: Option<String>) -> Self {
+    fn new(
+        app: &'a AppHandle,
+        folder: &Path,
+        title: &str,
+        kind: Kind,
+        summary_model: Option<String>,
+    ) -> Self {
         let meeting = Meeting::load(folder).ok();
+        let summary_only = kind == Kind::Summarize;
         let steps = SHOWN_STEPS
             .iter()
+            .filter(|&&step| (step == Step::Summary) == summary_only)
             .map(|&step| StepProgress {
                 step,
                 status: match &meeting {
-                    Some(meeting) if step == Step::Summary && !meeting.settings.summary => {
-                        StepStatus::Skipped
-                    }
+                    Some(_) if summary_only => StepStatus::Pending,
                     Some(meeting) => match meeting.status(step) {
                         StepStatus::Running => StepStatus::Pending,
                         status => status,
@@ -392,6 +404,7 @@ impl<'a> Tracker<'a> {
                 summary_characters: 0,
                 transcribe_model: speech_models::chosen().name.to_string(),
                 summary_model,
+                summary_only,
             },
             started: Instant::now(),
             first_fraction: None,
@@ -452,8 +465,6 @@ impl<'a> Tracker<'a> {
             }
         } else if !finished(Step::Export) {
             0.92
-        } else if !finished(Step::Summary) {
-            0.95
         } else {
             1.0
         };
@@ -475,7 +486,7 @@ impl<'a> Tracker<'a> {
                 Phase::Processing {
                     title: self.progress.title.clone(),
                     step: step_label(&self.progress).into(),
-                    percent: self.progress.percent,
+                    percent: (!self.progress.summary_only).then_some(self.progress.percent),
                 },
             );
         }

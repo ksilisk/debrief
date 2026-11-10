@@ -80,10 +80,18 @@ pub async fn process_meeting(app: AppHandle, folder: String) -> Result<(), Strin
     .await
 }
 
+/// `prompt` becomes the meeting's own; `None` makes it use the default again.
 #[tauri::command]
-pub async fn write_summary(app: AppHandle, folder: String) -> Result<(), String> {
+pub async fn write_summary(
+    app: AppHandle,
+    folder: String,
+    prompt: Option<String>,
+) -> Result<(), String> {
     blocking(move || {
-        processing::summarize(&app, &library::checked_folder(&folder)?);
+        let folder = library::checked_folder(&folder)?;
+        debrief_core::summary::set_own_prompt(&folder, prompt.as_deref())
+            .map_err(|error| error.to_string())?;
+        processing::summarize(&app, &folder);
         Ok(())
     })
     .await

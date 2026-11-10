@@ -48,12 +48,6 @@ pub struct Args {
     /// Record audio only.
     #[arg(long)]
     no_video: bool,
-    /// Write a summary after processing. Default: the setting from `debrief config summaries`.
-    #[arg(long, conflicts_with = "no_summary")]
-    summary: bool,
-    /// Don't write a summary for this recording.
-    #[arg(long)]
-    no_summary: bool,
     /// Video frames per second.
     #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=30))]
     fps: u32,
@@ -85,7 +79,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         pressed_at,
         Settings {
             language: args.language,
-            summary: wants_summary(&args),
         },
     );
     draft.video = (!args.no_video).then(|| VideoFile {
@@ -129,14 +122,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     println!("  Me:    {}", sources.microphone);
     println!("  Them:  {}", sources.system_audio);
     println!("  Video: {}", sources.video.as_deref().unwrap_or("off"));
-    println!(
-        "  Summary: {}",
-        if wants_summary(&args) {
-            "after processing"
-        } else {
-            "off"
-        }
-    );
     match args.duration {
         Some(duration) => println!(
             "Stops after {} or on Ctrl+C.",
@@ -285,15 +270,6 @@ fn print_summary(folder: &Path, meeting: &Meeting) {
 
 fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
-}
-
-fn wants_summary(args: &Args) -> bool {
-    if args.summary || args.no_summary {
-        return args.summary;
-    }
-    debrief_summarize::config::folder()
-        .and_then(|folder| debrief_summarize::config::Settings::load(&folder))
-        .is_ok_and(|settings| settings.summary.on_by_default)
 }
 
 fn fixes(stats: &TrackStats) -> u64 {

@@ -43,7 +43,6 @@ pub struct SummaryView {
     pub provider: Option<Provider>,
     pub model: String,
     pub context_tokens: usize,
-    pub on_by_default: bool,
     pub keys: SavedKeys,
 }
 
@@ -60,7 +59,6 @@ pub struct SavedKeys {
 pub struct Changes {
     pub video: Option<bool>,
     pub fps: Option<u32>,
-    pub summaries_on: Option<bool>,
     pub context_tokens: Option<usize>,
 }
 
@@ -101,7 +99,6 @@ pub fn view() -> Result<View, String> {
             provider: summary.provider,
             model: summary.model,
             context_tokens: summary.context_tokens,
-            on_by_default: summary.on_by_default,
             keys: SavedKeys {
                 openai: keys.get(Provider::Openai).map(masked),
                 anthropic: keys.get(Provider::Anthropic).map(masked),
@@ -122,9 +119,6 @@ pub fn save(changes: Changes) -> Result<(), String> {
         }
         if let Some(fps) = changes.fps {
             settings.recording.fps = fps;
-        }
-        if let Some(on) = changes.summaries_on {
-            settings.summary.on_by_default = on;
         }
         if let Some(context) = changes.context_tokens.filter(|&tokens| tokens > 0) {
             settings.summary.context_tokens = context;

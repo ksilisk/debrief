@@ -89,9 +89,6 @@ pub struct Recording {
 pub struct Settings {
     #[serde(default)]
     pub language: Language,
-    /// Write a summary after the transcript.
-    #[serde(default)]
-    pub summary: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,7 +449,6 @@ mod tests {
             time("2026-11-04T14:30:05+03:00"),
             Settings {
                 language: Language::Russian,
-                summary: true,
             },
         );
         meeting.tracks.me.source = "MacBook Pro Microphone".into();

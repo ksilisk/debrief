@@ -16,7 +16,6 @@ export interface SettingsView {
     provider: Provider | null;
     model: string;
     contextTokens: number;
-    onByDefault: boolean;
     /** The saved keys, masked. */
     keys: Record<Provider, string | null>;
   };
@@ -33,7 +32,6 @@ export interface SettingsView {
 export interface Changes {
   video?: boolean;
   fps?: number;
-  summariesOn?: boolean;
   contextTokens?: number;
 }
 

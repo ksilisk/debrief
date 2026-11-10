@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use debrief_core::process::{Event, ProcessError, summarize_now};
-use debrief_core::summary::{MARKDOWN_FILE, Summarizer, TEXT_FILE};
+use debrief_core::summary::{self, MARKDOWN_FILE, PROMPT_FILE, Summarizer, TEXT_FILE};
 use debrief_summarize::RemoteModel;
 
 #[derive(clap::Args)]
@@ -22,7 +22,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     ctrlc::set_handler(move || on_ctrl_c.store(true, Ordering::SeqCst))
         .context("could not catch Ctrl+C")?;
 
-    println!("Writing the summary with {}", model.model());
+    let prompt = if summary::own_prompt(&args.folder)?.is_some() {
+        format!("this meeting's own prompt ({PROMPT_FILE})")
+    } else {
+        "the default prompt".to_string()
+    };
+    println!("Writing the summary with {}, using {prompt}", model.model());
     let result = summarize_now(&args.folder, &mut model, &cancelled, &mut show_progress);
     println!();
     match result {

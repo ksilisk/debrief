@@ -30,7 +30,8 @@ enum Command {
     Process(process::Args),
     /// List the Whisper models or download one.
     Model(model::Args),
-    /// Write or rewrite the summary of a transcribed meeting.
+    /// Write or rewrite the summary of a transcribed meeting, with its own
+    /// summary-prompt.txt when it has one.
     Summarize(summarize::Args),
     /// Show the settings, or set up summaries.
     Config(config::Args),

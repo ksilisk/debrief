@@ -36,8 +36,6 @@
   /** "main", "screen:<id>" or "window:<id>". */
   let videoSource = $state("main");
   let language = $state<Language>("ru");
-  let summary = $state(false);
-  let summaryModel = $state<string | null>(null);
   let sources = $state<SourceList | null>(null);
   let loading = $state(false);
   let starting = $state(false);
@@ -91,8 +89,6 @@
       fps = defaults.fps;
       videoSource = defaults.videoSource ? `${defaults.videoSource.kind}:${defaults.videoSource.id}` : "main";
       language = defaults.language;
-      summary = defaults.summary;
-      summaryModel = defaults.summaryModel;
     } catch {
       // Opened in a plain browser (npm run dev) instead of the Tauri window.
       return;
@@ -139,7 +135,6 @@
         fps,
         videoSource: parseVideoSource(videoSource),
         language,
-        summary,
       });
       title = "";
     } catch (e) {
@@ -261,24 +256,6 @@
           <option value="ru">Russian</option>
           <option value="en">English</option>
         </select></span>
-      </div>
-    </div>
-
-    <div class="src">
-      <span class="src-ic" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z" /><path d="M9 10h6M9 14h6M9 18h4" /></svg>
-      </span>
-      <div class="src-txt">
-        <span class="src-title"
-          ><b>Summary</b><InfoTip
-            label="Summary"
-            text="Turn off to get only the transcript for this recording. The default and the provider are set in Settings."
-          /></span
-        >
-        <span>{summaryModel ?? "Not set up yet"}</span>
-      </div>
-      <div class="src-ctl">
-        <Toggle bind:checked={summary} label="Write a summary after the transcript" disabled={summaryModel === null} />
       </div>
     </div>
   </div>

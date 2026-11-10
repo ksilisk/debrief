@@ -124,7 +124,10 @@ fn entries(phase: &Phase, recent: &[Recent]) -> Vec<Entry> {
             step,
             percent,
         } => vec![
-            Entry::Status(format!("{step} · {percent}%")),
+            Entry::Status(match percent {
+                Some(percent) => format!("{step} · {percent}%"),
+                None => step.clone(),
+            }),
             Entry::Status(title.clone()),
         ],
     };
@@ -159,7 +162,7 @@ fn title(phase: &Phase) -> Option<String> {
             paused: true,
             ..
         } => Some(format!("Paused {}", clock(*elapsed_seconds))),
-        Phase::Processing { percent, .. } => Some(format!("{percent}%")),
+        Phase::Processing { percent, .. } => percent.map(|percent| format!("{percent}%")),
     }
 }
 
@@ -381,7 +384,7 @@ mod tests {
         let phase = Phase::Processing {
             title: "Sprint planning".into(),
             step: "Transcribing".into(),
-            percent: 61,
+            percent: Some(61),
         };
         assert_eq!(
             entries(&phase, &[])[0],

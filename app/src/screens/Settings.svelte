@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import InfoTip from "../lib/components/InfoTip.svelte";
-  import Toggle from "../lib/components/Toggle.svelte";
   import { size } from "../lib/recording";
   import {
     age,
@@ -74,7 +73,6 @@
 
   /** "5", "10" or "off". */
   let video = $state("5");
-  let summariesOn = $state(false);
   let provider = $state<Provider | "">("");
   let keyInput = $state("");
   /** null until Test connection lists them. */
@@ -124,7 +122,6 @@
       const loaded = await loadSettings();
       view = loaded;
       video = loaded.video ? String(loaded.fps) : "off";
-      summariesOn = loaded.summary.onByDefault;
       provider = loaded.summary.provider ?? "";
       model = loaded.summary.model;
       contextTokens = loaded.summary.contextTokens;
@@ -196,11 +193,6 @@
   function changeVideo() {
     const on = video !== "off";
     void save(on ? { video: on, fps: Number(video) } : { video: on }, (e) => (recordingError = e));
-  }
-
-  function changeSummariesOn(on: boolean) {
-    summariesOn = on;
-    void save({ summariesOn: on }, (e) => (summaryError = e));
   }
 
   function changeProvider() {
@@ -415,21 +407,15 @@
     </section>
 
     <section class="group">
-      <h3>Summaries (optional)</h3>
+      <h3>Summaries, on request</h3>
       <div class="row">
         <span class="k"
-          >Write summaries<InfoTip
-            label="Write summaries"
-            text="Default for new recordings. You can switch it for one recording on the New recording screen, or write a summary later from the meeting screen."
+          >Summaries<InfoTip
+            label="Summaries"
+            text="A summary is written when you click Write summary on a meeting's Summary tab, with the prompt below or the meeting's own."
           /></span
         >
-        <span class="v">
-          <Toggle
-            bind:checked={() => summariesOn, changeSummariesOn}
-            label="Write summaries for new recordings"
-          />
-          <span class="status">{summaryStatus}</span>
-        </span>
+        <span class="v"><span class="status">{summaryStatus}</span></span>
       </div>
       <div class="row">
         <span class="k"

@@ -57,12 +57,12 @@ debrief/
 1. **Transcribe** each track: converted to 16 kHz mono in memory; Silero VAD finds the speech, and Whisper gets only that, joined with 0.1 s gaps the way whisper.cpp's own VAD joins it, in one pass in the meeting's language. Line times are mapped back to the track; a line edge Whisper put on the wrong side of a pause moves to the speech, and lines Whisper is known to invent (subtitle credits, sound tags, three identical lines in a row) are dropped. A track without speech gets no lines. Each track's result is kept in `.work/`, so a resume redoes only an unfinished track.
 2. **Merge** both tracks by time into `transcript.json`, marking echo lines: a Me line that overlaps Them lines within a second and shares at least 60% of its three-letter chunks with them, so the microphone heard the speakers. Lines under 8 letters are never marked.
 3. **Export** `transcript.md`, `transcript.txt`, `transcript.srt`: lines that aren't echo, in time order, with marked moments and pauses where they happened, and a count of the echo lines left out. Each subtitle holds at most two lines of 42 characters; a longer line is split and its time shared by length.
-4. **Summary**, if summaries are on for the meeting (otherwise skipped): the transcript as plain text, without echo lines, goes to the chosen model with the user's prompt, and the answer is saved as `summary.md` and, without Markdown, `summary.txt`. Before sending, the size is estimated (characters ÷ 3, plus room for the answer); a transcript that doesn't fit the model's context is refused, not split. `debrief summarize` writes or rewrites a summary at any time.
+4. **Summary**, only on request: processing stops after the transcript files, and the summary is written when the user clicks Write summary on the meeting's Summary tab (or runs `debrief summarize`). The transcript as plain text, without echo lines, goes to the chosen model with the meeting's own prompt (`summary-prompt.txt` in the meeting folder) or the default one, and the answer is saved as `summary.md` and, without Markdown, `summary.txt`; a rewrite replaces them only once the new summary is complete. Before sending, the size is estimated (characters ÷ 3, plus room for the answer); a transcript that doesn't fit the model's context is refused, not split. Writing the summary on request means it can already use the meeting's own prompt, and a meeting nobody summarizes sends nothing.
 5. **Compress** the audio: not done yet; the tracks stay WAV for now.
 
 The language is set per meeting, Russian by default. Auto lets Whisper detect one language per track from the first 30 seconds of its speech; since Me and Them are separate tracks, a meeting where each side speaks its own language works, but a track that switches language midway does not (see M0.3).
 
-Audio and video never leave the computer. Only the transcript text is sent, and only to the summary provider the user chose.
+Audio and video never leave the computer. Only the transcript text is sent, only when the user asks for a summary, and only to the summary provider the user chose.
 
 ## Meeting folder
 
@@ -78,15 +78,16 @@ Each meeting gets its own folder inside the folder chosen in Settings (default `
 ├── transcript.md    Me and Them with timecodes, marks and pauses
 ├── transcript.txt   the same as plain text
 ├── transcript.srt   subtitles for screen.mp4 (or the audio)
-├── summary.md       only when summaries are on
-└── summary.txt
+├── summary.md       after Write summary
+├── summary.txt
+└── summary-prompt.txt  the meeting's own summary prompt, when it has one
 ```
 
 `meeting.json` is written when recording starts and saved again after each change, through a temporary file and a rename, so a crash never leaves half a file:
 
 - `format`: 1. It changes only when an older Debrief would read a field wrong; new optional fields keep the number. Debrief refuses a meeting with a newer format. Until v0.1 ships, format 1 may still change.
 - `recording`: `started_at`, `stopped_at` (empty while recording or after a crash), `duration_seconds`, `error`, and `files_deleted_at` once the storage cleanup has deleted the audio and video.
-- `settings`: `language` (`ru`, `en` or `auto`; `ru` by default) and `summary` (whether to write one).
+- `settings`: `language` (`ru`, `en` or `auto`; `ru` by default). Older meetings may also have `summary`, which is ignored.
 - `tracks.me`, `tracks.them`: file name, source (the microphone, or the app or apps), recorder diagnostics.
 - `video`: file, source, frame rate, size, and `parts` (file and start position) while they aren't joined yet.
 - `marks`: marked moments, in seconds from the start of the audio.
@@ -105,8 +106,8 @@ Everything goes to the Trash, through NSFileManager rather than Finder (which wo
 
 The app's own files live in `~/Library/Application Support/io.github.ksilisk.debrief/`, never in Documents (which macOS may sync to iCloud):
 
-- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context, answer limit and whether new recordings write a summary, and the storage cleanup (what to delete and after how many days; never by default).
-- `summary-prompt.txt`: the instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language.
+- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context and answer limit, and the storage cleanup (what to delete and after how many days; never by default).
+- `summary-prompt.txt`: the default instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language. A meeting with its own `summary-prompt.txt` uses that one instead.
 - `keys.json`: API keys by provider, created with mode 600 so only the owner can read it.
 - `models/`: the downloaded Whisper models; `settings.json` names the one in use (left out for the default). When a download finishes and the model in use isn't downloaded, Debrief switches to the new one. Meetings that couldn't be transcribed for want of a model are processed when a download finishes (only those from the running session; older ones have Process now).
 
