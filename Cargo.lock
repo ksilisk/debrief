@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "debrief-capture",
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-capture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2",
  "debrief-core",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "hound",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-summarize"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "debrief-core",
  "reqwest",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "debrief-transcribe"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "debrief-core",
  "objc2-foundation",
