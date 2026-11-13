@@ -23,8 +23,8 @@ use screencapturekit::shareable_content::SCShareableContentInfo;
 use screencapturekit::stream::StreamCallbacks;
 
 use crate::{
-    App, AudioChunk, CaptureError, CaptureInfo, Display, Handler, Microphone, Options, Source,
-    Sources, SystemAudio, Video, VideoTarget, Window,
+    App, AudioChunk, CaptureError, CaptureInfo, Display, Handler, Microphone, MicrophoneSource,
+    Options, Source, Sources, SystemAudio, Video, VideoTarget, Window,
 };
 use tap::Tap;
 
@@ -97,8 +97,9 @@ pub fn sources() -> Result<Sources, CaptureError> {
 }
 
 pub struct Capture {
-    audio: SCStream,
-    tap: Tap,
+    /// The microphone; `None` when it is not recorded.
+    audio: Option<SCStream>,
+    tap: Option<Tap>,
     video: Option<VideoCapture>,
     info: CaptureInfo,
 }
@@ -119,88 +120,55 @@ struct VideoFile {
 
 impl Capture {
     pub fn start(options: &Options, handler: Arc<dyn Handler>) -> Result<Self, CaptureError> {
-        let content = SCShareableContent::get().map_err(map_error)?;
-        let displays = content.displays();
-        let main_display = displays
-            .first()
-            .ok_or_else(|| CaptureError::NotFound("A display".into()))?;
-
-        let microphones = AudioInputDevice::list();
-        let microphone = match &options.microphone {
-            Some(id) => microphones
-                .iter()
-                .find(|device| &device.id == id)
-                .ok_or_else(|| CaptureError::NotFound(format!("Microphone {id}")))?,
-            None => microphones
-                .iter()
-                .find(|device| device.is_default)
-                .or(microphones.first())
-                .ok_or_else(|| CaptureError::NotFound("A microphone".into()))?,
+        // System audio alone comes from the tap and needs no ScreenCaptureKit stream,
+        // so it doesn't need the Screen Recording permission either.
+        let content = match options.microphone.is_some() || options.video.is_some() {
+            true => Some(SCShareableContent::get().map_err(map_error)?),
+            false => None,
         };
+        let microphone = options
+            .microphone
+            .as_ref()
+            .map(find_microphone)
+            .transpose()?;
 
         // Started first: creating its device can take a couple of seconds
         // (seen with AirPods), and the start of the call should not be lost.
         let (tap, system_audio) = match &options.system_audio {
-            SystemAudio::AllApps => (
-                Tap::start_all(Arc::clone(&handler))?,
-                "All apps".to_string(),
+            Some(SystemAudio::AllApps) => (
+                Some(Tap::start_all(Arc::clone(&handler))?),
+                Some("All apps".to_string()),
             ),
-            SystemAudio::App { bundle_id } => (
-                Tap::start(bundle_id, Arc::clone(&handler))?,
-                app_name(&content, bundle_id),
+            Some(SystemAudio::App { bundle_id }) => (
+                Some(Tap::start(bundle_id, Arc::clone(&handler))?),
+                Some(app_name(content.as_ref(), bundle_id)),
             ),
-        };
-
-        let filter = SCContentFilter::create()
-            .with_display(main_display)
-            .with_excluding_windows(&[])
-            .build()
-            .map_err(map_error)?;
-
-        // The stream needs a video size even for audio only; these frames are dropped.
-        let config = SCStreamConfiguration::new()
-            .with_width(16)
-            .with_height(16)
-            .with_fps(1)
-            .with_captures_audio(false)
-            .with_sample_rate(SAMPLE_RATE)
-            .with_channel_count(1)
-            .with_captures_microphone(true)
-            .and_then(|config| config.with_microphone_capture_device_id(&microphone.id))
-            .map_err(map_error)?;
-
-        let on_error = Arc::clone(&handler);
-        let mut audio = SCStream::new_with_delegate(
-            &filter,
-            &config,
-            StreamCallbacks::new()
-                .on_error(move |error| on_error.failed(format!("Audio stopped: {error}"))),
-        )
-        .map_err(map_error)?;
-        audio
-            .add_output_handler(|_, _| {}, SCStreamOutputType::Screen)
-            .map_err(map_error)?;
-        let mic = Arc::clone(&handler);
-        audio
-            .add_output_handler(
-                move |sample, _| deliver(mic.as_ref(), Source::Microphone, &sample),
-                SCStreamOutputType::Microphone,
-            )
-            .map_err(map_error)?;
-
-        let (video, video_info) = match &options.video {
-            Some(video) => {
-                let (capture, info) = VideoCapture::new(&content, &displays, video, &handler)?;
-                (Some(capture), Some(info))
-            }
             None => (None, None),
         };
 
-        audio.start_capture().map_err(map_error)?;
+        let audio = match (&content, &microphone) {
+            (Some(content), Some((id, _))) => Some(microphone_stream(content, id, &handler)?),
+            _ => None,
+        };
+
+        let (video, video_info) = match (&content, &options.video) {
+            (Some(content), Some(video)) => {
+                let displays = content.displays();
+                let (capture, info) = VideoCapture::new(content, &displays, video, &handler)?;
+                (Some(capture), Some(info))
+            }
+            _ => (None, None),
+        };
+
+        if let Some(audio) = &audio {
+            audio.start_capture().map_err(map_error)?;
+        }
         if let Some(video) = &video
             && let Err(error) = video.stream.start_capture()
         {
-            let _ = audio.stop_capture();
+            if let Some(audio) = &audio {
+                let _ = audio.stop_capture();
+            }
             return Err(map_error(error));
         }
 
@@ -209,7 +177,7 @@ impl Capture {
             tap,
             video,
             info: CaptureInfo {
-                microphone: microphone.name.clone(),
+                microphone: microphone.map(|(_, name)| name),
                 system_audio,
                 video: video_info,
             },
@@ -273,13 +241,85 @@ impl Capture {
                 file.wait_until_finished();
             }
         }
-        let audio = self.audio.stop_capture().map_err(map_error);
+        let audio = match &self.audio {
+            Some(audio) => audio.stop_capture().map_err(map_error),
+            None => Ok(()),
+        };
         drop(self.tap);
         result.and(audio)
     }
 }
 
-fn app_name(content: &SCShareableContent, bundle_id: &str) -> String {
+/// The microphone's ID and name.
+fn find_microphone(choice: &MicrophoneSource) -> Result<(String, String), CaptureError> {
+    let microphones = AudioInputDevice::list();
+    let device = match choice {
+        MicrophoneSource::Device { id } => microphones
+            .iter()
+            .find(|device| &device.id == id)
+            .ok_or_else(|| CaptureError::NotFound(format!("Microphone {id}")))?,
+        MicrophoneSource::Default => microphones
+            .iter()
+            .find(|device| device.is_default)
+            .or(microphones.first())
+            .ok_or_else(|| CaptureError::NotFound("A microphone".into()))?,
+    };
+    Ok((device.id.clone(), device.name.clone()))
+}
+
+fn microphone_stream(
+    content: &SCShareableContent,
+    microphone_id: &str,
+    handler: &Arc<dyn Handler>,
+) -> Result<SCStream, CaptureError> {
+    let displays = content.displays();
+    let main_display = displays
+        .first()
+        .ok_or_else(|| CaptureError::NotFound("A display".into()))?;
+    let filter = SCContentFilter::create()
+        .with_display(main_display)
+        .with_excluding_windows(&[])
+        .build()
+        .map_err(map_error)?;
+
+    // The stream needs a video size even for audio only; these frames are dropped.
+    let config = SCStreamConfiguration::new()
+        .with_width(16)
+        .with_height(16)
+        .with_fps(1)
+        .with_captures_audio(false)
+        .with_sample_rate(SAMPLE_RATE)
+        .with_channel_count(1)
+        .with_captures_microphone(true)
+        .and_then(|config| config.with_microphone_capture_device_id(microphone_id))
+        .map_err(map_error)?;
+
+    let on_error = Arc::clone(handler);
+    let mut audio = SCStream::new_with_delegate(
+        &filter,
+        &config,
+        StreamCallbacks::new()
+            .on_error(move |error| on_error.failed(format!("Audio stopped: {error}"))),
+    )
+    .map_err(map_error)?;
+    audio
+        .add_output_handler(|_, _| {}, SCStreamOutputType::Screen)
+        .map_err(map_error)?;
+    let mic = Arc::clone(handler);
+    audio
+        .add_output_handler(
+            move |sample, _| deliver(mic.as_ref(), Source::Microphone, &sample),
+            SCStreamOutputType::Microphone,
+        )
+        .map_err(map_error)?;
+    Ok(audio)
+}
+
+/// Without ScreenCaptureKit's list of apps (system audio only), the bundle ID.
+fn app_name(content: Option<&SCShareableContent>, bundle_id: &str) -> String {
+    let Some(content) = content else {
+        return bundle_id.to_string();
+    };
     content
         .applications()
         .iter()

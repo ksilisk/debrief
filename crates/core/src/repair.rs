@@ -48,7 +48,7 @@ pub fn repair(folder: &Path) -> Result<Option<Repaired>, RepairError> {
 
     let mut duration: f64 = 0.0;
     let mut stopped_at = meeting.recording.started_at;
-    for track in [&meeting.tracks.me, &meeting.tracks.them] {
+    for (_, track) in meeting.tracks.recorded() {
         let path = folder.join(&track.file);
         if !path.exists() {
             continue;

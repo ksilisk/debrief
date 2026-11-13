@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use chrono::Local;
-use debrief_capture::{Capture, Options, SystemAudio, Video, VideoTarget};
+use debrief_capture::{Capture, MicrophoneSource, Options, SystemAudio, Video, VideoTarget};
 use debrief_core::meeting::{
     self, Language, MEETING_FILE, Meeting, Settings, VIDEO_FILE, VideoFile,
 };
@@ -34,11 +34,17 @@ pub struct Args {
     #[arg(long)]
     out: Option<PathBuf>,
     /// Microphone ID from `debrief sources`. Default: the system default.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_mic")]
     mic: Option<String>,
+    /// Don't record the microphone: only the system audio, for example a talk.
+    #[arg(long, conflicts_with = "no_system_audio")]
+    no_mic: bool,
     /// Record system audio from one app only, by bundle ID (for example us.zoom.xos).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_system_audio")]
     app: Option<String>,
+    /// Don't record system audio: only the microphone, for example a meeting in the room.
+    #[arg(long)]
+    no_system_audio: bool,
     /// Record this screen, by ID. Default: the main screen.
     #[arg(long, conflicts_with_all = ["window", "no_video"])]
     screen: Option<u32>,
@@ -63,7 +69,10 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         Some(folder) => {
             fs::create_dir_all(folder)
                 .with_context(|| format!("could not create {}", folder.display()))?;
-            if folder.join(MEETING_FILE).exists() || folder.join(Track::Me.file_name()).exists() {
+            let taken = [MEETING_FILE, Track::Me.file_name(), Track::Them.file_name()]
+                .iter()
+                .any(|file| folder.join(file).exists());
+            if taken {
                 bail!("{} already has a recording", folder.display());
             }
             folder.clone()
@@ -81,6 +90,12 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             language: args.language,
         },
     );
+    if args.no_mic {
+        draft.tracks.me = None;
+    }
+    if args.no_system_audio {
+        draft.tracks.them = None;
+    }
     draft.video = (!args.no_video).then(|| VideoFile {
         file: VIDEO_FILE.to_string(),
         source: String::new(),
@@ -101,13 +116,16 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
     let mut recorder = Recorder::start(&folder, draft, |video, sink| {
         let options = Options {
-            microphone: args.mic.clone(),
-            system_audio: match &args.app {
+            microphone: (!args.no_mic).then(|| match &args.mic {
+                Some(id) => MicrophoneSource::Device { id: id.clone() },
+                None => MicrophoneSource::Default,
+            }),
+            system_audio: (!args.no_system_audio).then(|| match &args.app {
                 Some(bundle_id) => SystemAudio::App {
                     bundle_id: bundle_id.clone(),
                 },
                 None => SystemAudio::AllApps,
-            },
+            }),
             video: video.map(|path| Video {
                 target,
                 fps: args.fps,
@@ -119,8 +137,14 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     let sources = recorder.sources().clone();
 
     println!("Recording to {}", folder.display());
-    println!("  Me:    {}", sources.microphone);
-    println!("  Them:  {}", sources.system_audio);
+    println!(
+        "  Me:    {}",
+        sources.microphone.as_deref().unwrap_or("off")
+    );
+    println!(
+        "  Them:  {}",
+        sources.system_audio.as_deref().unwrap_or("off")
+    );
     println!("  Video: {}", sources.video.as_deref().unwrap_or("off"));
     match args.duration {
         Some(duration) => println!(
@@ -205,22 +229,32 @@ fn print_status(status: &Status) {
         .video_bytes
         .map(|bytes| format!("  video {}", size(bytes)))
         .unwrap_or_default();
+    let track = |name: &str, stats: &Option<TrackStats>| {
+        stats
+            .as_ref()
+            .map(|stats| format!("  {name} {}", size(stats.bytes())))
+            .unwrap_or_default()
+    };
+    let fixes = [&status.me, &status.them]
+        .into_iter()
+        .flatten()
+        .map(|stats| fixes(stats).to_string())
+        .collect::<Vec<_>>()
+        .join("/");
     print!(
-        "\r{}{}  me {}  them {}{video}  marks {}  timing fixes {}/{}   ",
+        "\r{}{}{}{}{video}  marks {}  timing fixes {fixes}   ",
         if status.paused { "Paused " } else { "" },
         clock(status.position),
-        size(status.me.bytes()),
-        size(status.them.bytes()),
+        track("me", &status.me),
+        track("them", &status.them),
         status.marks,
-        fixes(&status.me),
-        fixes(&status.them),
     );
     let _ = io::stdout().flush();
 }
 
 fn print_summary(folder: &Path, meeting: &Meeting) {
     println!("Saved to {}", folder.display());
-    for track in [&meeting.tracks.me, &meeting.tracks.them] {
+    for (_, track) in meeting.tracks.recorded() {
         let Some(stats) = &track.stats else {
             continue;
         };

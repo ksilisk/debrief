@@ -46,7 +46,8 @@ impl Session {
     /// With video on, the first part's file is [`Session::video_part`].
     pub fn create(folder: &Path, mut meeting: Meeting) -> Result<Self, SessionError> {
         let lock = take_lock(folder)?;
-        let tracks = Tracks::create(folder)?;
+        let recorded: Vec<Track> = meeting.tracks.recorded().map(|(track, _)| track).collect();
+        let tracks = Tracks::create(folder, &recorded)?;
         if let Some(video) = &mut meeting.video {
             video.parts = vec![VideoPart {
                 file: video_part_name(1),
@@ -100,7 +101,7 @@ impl Session {
         self.timeline.position_at(at)
     }
 
-    pub fn stats(&self, track: Track) -> &TrackStats {
+    pub fn stats(&self, track: Track) -> Option<&TrackStats> {
         self.tracks.stats(track)
     }
 
@@ -165,8 +166,11 @@ impl Session {
         recording.stopped_at = Some(Local::now().fixed_offset());
         recording.duration_seconds = self.timeline.position_at(at);
         recording.error = error;
-        self.meeting.tracks.me.stats = Some(stats.me);
-        self.meeting.tracks.them.stats = Some(stats.them);
+        for (track, stats) in [(Track::Me, stats.me), (Track::Them, stats.them)] {
+            if let Some(audio) = self.meeting.tracks.get_mut(track) {
+                audio.stats = stats;
+            }
+        }
         self.meeting.save(&self.folder)?;
         drop(self.lock);
         let _ = fs::remove_file(self.folder.join(LOCK_FILE));
@@ -395,8 +399,8 @@ mod tests {
         assert_eq!(parts[1].at_seconds, 2.0);
         assert!(meeting.recording.stopped_at.is_some());
 
-        for stats in [&meeting.tracks.me.stats, &meeting.tracks.them.stats] {
-            let stats = stats.as_ref().expect("stats");
+        for (_, audio) in meeting.tracks.recorded() {
+            let stats = audio.stats.as_ref().expect("stats");
             assert_eq!(stats.frames, 3 * SAMPLE_RATE as u64);
             assert_eq!(stats.gaps_filled, 0);
         }
@@ -413,6 +417,26 @@ mod tests {
         assert_eq!(meeting.pauses.len(), 1);
         assert_eq!(meeting.pauses[0].duration_seconds, 3.0);
         assert!((meeting.recording.duration_seconds - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_switched_off_track_gets_no_file() {
+        let folder = temp_folder("session-one-track");
+        let mut draft = meeting(false);
+        draft.tracks.me = None;
+        let mut session = Session::create(&folder, draft).expect("create");
+        feed(&mut session, 10.0, 11.0);
+        assert!(session.stats(Track::Me).is_none());
+        let meeting = session.finish(11.0, None).expect("finish");
+        assert!(meeting.tracks.me.is_none());
+        let them = meeting
+            .tracks
+            .them
+            .as_ref()
+            .and_then(|them| them.stats.as_ref());
+        assert_eq!(them.map(|stats| stats.frames), Some(SAMPLE_RATE as u64));
+        assert!(!folder.join(Track::Me.file_name()).exists());
+        assert!(folder.join(Track::Them.file_name()).exists());
     }
 
     #[test]

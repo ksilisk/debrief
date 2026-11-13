@@ -153,8 +153,12 @@ pub struct TranscriptionSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RecordingSettings {
+    /// Off for a talk heard only through the Mac.
+    pub record_microphone: bool,
     /// A microphone ID; `None` uses the system default.
     pub microphone: Option<String>,
+    /// Off for a meeting in the room or a recording on your own.
+    pub record_system_audio: bool,
     /// The bundle ID of the one app whose sound is recorded; `None` records all apps.
     pub app: Option<String>,
     pub video: bool,
@@ -167,7 +171,9 @@ pub struct RecordingSettings {
 impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
+            record_microphone: true,
             microphone: None,
+            record_system_audio: true,
             app: None,
             video: true,
             fps: 5,

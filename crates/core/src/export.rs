@@ -89,13 +89,19 @@ fn markdown(meeting: &Meeting, transcript: &Transcript) -> String {
         title(meeting),
         details(meeting, transcript)
     );
+    let labelled = transcript.single_speaker().is_none();
     let items = timeline(meeting, transcript);
     for item in &items {
         match item {
-            Item::Line(segment) => out.push_str(&format!(
+            Item::Line(segment) if labelled => out.push_str(&format!(
                 "**{} · {}** {}\n\n",
                 clock(segment.start),
                 speaker(segment.speaker),
+                segment.text
+            )),
+            Item::Line(segment) => out.push_str(&format!(
+                "**{}** {}\n\n",
+                clock(segment.start),
                 segment.text
             )),
             Item::Mark { at } => out.push_str(&format!("★ **{} · Marked moment**\n\n", clock(*at))),
@@ -111,24 +117,52 @@ fn markdown(meeting: &Meeting, transcript: &Transcript) -> String {
 }
 
 fn plain_text(meeting: &Meeting, transcript: &Transcript) -> String {
-    let mut out = text_for_summary(meeting, transcript);
+    let mut out = header(meeting, transcript);
+    out.push_str(&plain_lines(meeting, transcript));
     out.push('\n');
     out.push_str(&ending(transcript));
     out
 }
 
-/// The plain text transcript without the note about echo lines.
+/// What the summary model reads: the plain text transcript without the note
+/// about echo lines, and with a note when the lines don't say who spoke.
 pub(crate) fn text_for_summary(meeting: &Meeting, transcript: &Transcript) -> String {
-    let mut out = format!("{}\n{}\n\n", title(meeting), details(meeting, transcript));
+    let mut out = header(meeting, transcript);
+    if let Some(track) = transcript.single_speaker() {
+        out.push_str(match track {
+            Track::Me => {
+                "The lines don't say who is speaking: one microphone recorded everyone, \
+                 so there may be several people.\n\n"
+            }
+            Track::Them => {
+                "The lines don't say who is speaking: they come from the sound the computer \
+                 played, so there may be several people.\n\n"
+            }
+        });
+    }
+    out.push_str(&plain_lines(meeting, transcript));
+    out
+}
+
+fn header(meeting: &Meeting, transcript: &Transcript) -> String {
+    format!("{}\n{}\n\n", title(meeting), details(meeting, transcript))
+}
+
+fn plain_lines(meeting: &Meeting, transcript: &Transcript) -> String {
+    let mut out = String::new();
+    let labelled = transcript.single_speaker().is_none();
     let items = timeline(meeting, transcript);
     for item in &items {
         match item {
-            Item::Line(segment) => out.push_str(&format!(
+            Item::Line(segment) if labelled => out.push_str(&format!(
                 "{}  {:<4}  {}\n",
                 clock(segment.start),
                 speaker(segment.speaker),
                 segment.text
             )),
+            Item::Line(segment) => {
+                out.push_str(&format!("{}  {}\n", clock(segment.start), segment.text))
+            }
             Item::Mark { at } => out.push_str(&format!("★ {}  Marked moment\n", clock(*at))),
             Item::Pause { at, seconds } => out.push_str(&format!(
                 "⏸ {}  Paused for {}\n",
@@ -145,16 +179,20 @@ pub(crate) fn text_for_summary(meeting: &Meeting, transcript: &Transcript) -> St
 fn subtitles(transcript: &Transcript) -> String {
     let mut out = String::new();
     let mut number = 0;
+    let labelled = transcript.single_speaker().is_none();
     for segment in transcript.segments.iter().filter(|segment| !segment.echo) {
-        let label = speaker(segment.speaker);
-        let rows = wrap(&format!("{label}: {}", segment.text), SUBTITLE_LINE_CHARS);
+        let label = |text: &str| match labelled {
+            true => format!("{}: {text}", speaker(segment.speaker)),
+            false => text.to_string(),
+        };
+        let rows = wrap(&label(&segment.text), SUBTITLE_LINE_CHARS);
         let pieces: Vec<Vec<String>> = rows
             .chunks(SUBTITLE_LINES)
             .enumerate()
             .map(|(index, rows)| {
                 let mut rows = rows.to_vec();
                 if index > 0 {
-                    rows[0] = format!("{label}: {}", rows[0]);
+                    rows[0] = label(&rows[0]);
                 }
                 rows
             })
@@ -224,6 +262,11 @@ pub(crate) fn details(meeting: &Meeting, transcript: &Transcript) -> String {
     let mut parts = vec![when(meeting), length(meeting.recording.duration_seconds)];
     if let Some(languages) = languages(transcript) {
         parts.push(languages);
+    }
+    match meeting.tracks.only() {
+        Some(Track::Me) => parts.push("Microphone only".into()),
+        Some(Track::Them) => parts.push("System audio only".into()),
+        None => {}
     }
     parts.join(" · ")
 }
@@ -431,13 +474,56 @@ Me: Не уверен, давай решим после demo.
         for cue in &cues {
             let rows: Vec<&str> = cue.lines().skip(2).collect();
             assert!(rows.len() <= SUBTITLE_LINES);
-            assert!(rows[0].starts_with("Me: "));
+            assert!(rows[0].starts_with("раз"));
         }
         assert!(cues[0].contains("00:00:10,000 --> "));
         assert!(
             cues.last()
                 .is_some_and(|cue| cue.contains(" --> 00:00:40,000"))
         );
+    }
+
+    #[test]
+    fn one_track_lines_say_what_was_recorded_instead_of_who_spoke() {
+        let mut meeting = meeting("Offline sync");
+        meeting.tracks.them = None;
+        meeting.marks.clear();
+        meeting.pauses.clear();
+        let transcript = Transcript::merge(
+            TrackText {
+                language: "ru".into(),
+                lines: vec![line(4.0, 6.0, "Привет."), line(7.0, 9.0, "Начнём?")],
+            },
+            TrackText::default(),
+        );
+        let expected = "\
+Offline sync
+Wed 4 Nov 2026, 14:30 · 47 min · Russian · Microphone only
+
+00:00:04  Привет.
+00:00:07  Начнём?
+
+";
+        assert_eq!(plain_text(&meeting, &transcript), expected);
+        assert!(markdown(&meeting, &transcript).contains("**00:00:04** Привет."));
+        assert!(subtitles(&transcript).contains("\nПривет.\n"));
+        let summary_input = text_for_summary(&meeting, &transcript);
+        assert!(summary_input.contains("one microphone recorded everyone"));
+        assert!(summary_input.ends_with("00:00:07  Начнём?\n"));
+    }
+
+    #[test]
+    fn a_silent_them_track_also_drops_the_labels() {
+        let transcript = Transcript::merge(
+            TrackText {
+                language: "ru".into(),
+                lines: vec![line(4.0, 6.0, "Привет.")],
+            },
+            TrackText::default(),
+        );
+        let text = plain_text(&meeting("Sync"), &transcript);
+        assert!(text.contains("00:00:04  Привет."), "{text}");
+        assert!(!text.contains("Microphone only"));
     }
 
     #[test]

@@ -52,6 +52,10 @@ export interface MeetingDetails extends MeetingItem {
   /** The prompt from Settings. */
   defaultPrompt: string;
   segments: Segment[];
+  /** Whether lines say who spoke: only when both tracks have lines. */
+  labelled: boolean;
+  /** The one track recorded when the other was switched off. */
+  onlyTrack: Speaker | null;
   marks: number[];
   files: { name: string; bytes: number }[];
   /** RFC 3339; when the storage cleanup deleted the audio and video. */

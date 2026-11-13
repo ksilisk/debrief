@@ -199,24 +199,33 @@ impl TrackWriter {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordedTracks {
-    pub me: TrackStats,
-    pub them: TrackStats,
+    pub me: Option<TrackStats>,
+    pub them: Option<TrackStats>,
 }
 
+/// The WAV writers of the tracks being recorded; a switched-off track has none.
 pub struct Tracks {
-    me: TrackWriter,
-    them: TrackWriter,
+    me: Option<TrackWriter>,
+    them: Option<TrackWriter>,
 }
 
 impl Tracks {
-    pub fn create(folder: &Path) -> Result<Self, RecordingError> {
+    /// Creates a WAV file for each track in `recorded`.
+    pub fn create(folder: &Path, recorded: &[Track]) -> Result<Self, RecordingError> {
+        let writer = |track: Track| {
+            recorded
+                .contains(&track)
+                .then(|| TrackWriter::create(&folder.join(track.file_name())))
+                .transpose()
+        };
         Ok(Self {
-            me: TrackWriter::create(&folder.join(Track::Me.file_name()))?,
-            them: TrackWriter::create(&folder.join(Track::Them.file_name()))?,
+            me: writer(Track::Me)?,
+            them: writer(Track::Them)?,
         })
     }
 
-    /// `offset` is the chunk's position in the recording, the same for both tracks.
+    /// `offset` is the chunk's position in the recording, the same for both
+    /// tracks. Audio for a track that isn't recorded is dropped.
     pub fn write(
         &mut self,
         track: Track,
@@ -228,20 +237,24 @@ impl Tracks {
             Track::Me => &mut self.me,
             Track::Them => &mut self.them,
         };
-        writer.write(offset, sample_rate, samples)
+        match writer {
+            Some(writer) => writer.write(offset, sample_rate, samples),
+            None => Ok(()),
+        }
     }
 
-    pub fn stats(&self, track: Track) -> &TrackStats {
+    pub fn stats(&self, track: Track) -> Option<&TrackStats> {
         match track {
-            Track::Me => self.me.stats(),
-            Track::Them => self.them.stats(),
+            Track::Me => self.me.as_ref(),
+            Track::Them => self.them.as_ref(),
         }
+        .map(TrackWriter::stats)
     }
 
     pub fn finish(self) -> Result<RecordedTracks, RecordingError> {
         Ok(RecordedTracks {
-            me: self.me.finish()?,
-            them: self.them.finish()?,
+            me: self.me.map(TrackWriter::finish).transpose()?,
+            them: self.them.map(TrackWriter::finish).transpose()?,
         })
     }
 }

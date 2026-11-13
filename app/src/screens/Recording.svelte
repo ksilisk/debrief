@@ -111,17 +111,26 @@
   <div class="timer">{clock(status?.seconds ?? 0)}</div>
 
   <div class="lanes">
-    <div class="lane">
-      <div class="lane-lbl"><b class="me">Me</b><span>{live.microphone}</span></div>
-      <canvas bind:this={meCanvas} aria-label="Microphone level"></canvas>
-    </div>
-    <div class="lane">
-      <div class="lane-lbl"><b class="them">Them</b><span>{live.systemAudio}</span></div>
-      <canvas bind:this={themCanvas} aria-label="System audio level"></canvas>
-    </div>
+    {#if live.microphone !== null}
+      <div class="lane">
+        <div class="lane-lbl"><b class="me">Me</b><span>{live.microphone}</span></div>
+        <canvas bind:this={meCanvas} aria-label="Microphone level"></canvas>
+      </div>
+    {/if}
+    {#if live.systemAudio !== null}
+      <div class="lane">
+        <div class="lane-lbl"><b class="them">Them</b><span>{live.systemAudio}</span></div>
+        <canvas bind:this={themCanvas} aria-label="System audio level"></canvas>
+      </div>
+    {/if}
   </div>
 
   <div class="facts">
+    {#if live.microphone === null}
+      <span><b>Microphone</b>Off</span>
+    {:else if live.systemAudio === null}
+      <span><b>System audio</b>Off</span>
+    {/if}
     <span><b>Video</b>{live.video ?? "Off"}</span>
     <span><b>On disk</b><span class="num">{size(status?.bytes ?? 0)}</span></span>
     <span><b>Marked moments</b><span class="num">{status?.marks ?? 0}</span></span>

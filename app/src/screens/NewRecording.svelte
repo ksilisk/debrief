@@ -27,8 +27,10 @@
   } = $props();
 
   let title = $state("");
+  let recordMicrophone = $state(true);
   /** "" uses the system default. */
   let microphone = $state("");
+  let recordSystemAudio = $state(true);
   /** "" records all apps. */
   let app = $state("");
   let video = $state(true);
@@ -53,9 +55,17 @@
           };
         }),
   );
+  /** What this recording needs; ScreenCaptureKit carries the microphone and the video. */
+  const needed: Record<keyof Permissions, boolean> = $derived({
+    microphone: recordMicrophone,
+    screenRecording: recordMicrophone || video,
+    systemAudio: recordSystemAudio,
+  });
   /** For example "Microphone and System audio are not allowed." */
   const missingText = $derived.by(() => {
-    const names = permissionLine.filter((item) => item.dot === "warn").map((item) => shortNames[item.key]);
+    const names = permissionLine
+      .filter((item) => item.dot === "warn" && needed[item.key])
+      .map((item) => shortNames[item.key]);
     if (names.length === 0) return null;
     const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
     return `${list} ${names.length === 1 ? "is" : "are"} not allowed`;
@@ -83,7 +93,9 @@
   async function load() {
     try {
       const defaults = await recordingDefaults();
+      recordMicrophone = defaults.recordMicrophone;
       microphone = defaults.microphone ?? "";
+      recordSystemAudio = defaults.recordSystemAudio;
       app = defaults.app ?? "";
       video = defaults.video;
       fps = defaults.fps;
@@ -129,7 +141,9 @@
     try {
       await startRecording({
         title,
+        recordMicrophone,
         microphone: microphone === "" ? null : microphone,
+        recordSystemAudio,
         app: app === "" ? null : app,
         video,
         fps,
@@ -162,15 +176,21 @@
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
       </span>
       <div class="src-txt">
-        <span class="src-title"><b>Microphone</b><InfoTip label="Microphone" text="Your voice. Saved as its own track and labelled Me in the transcript." /></span>
+        <span class="src-title"
+          ><b>Microphone</b><InfoTip
+            label="Microphone"
+            text="Your voice. Saved as its own track and labelled Me in the transcript. Turn it off for a talk you only listen to. One of Microphone and System audio stays on."
+          /></span
+        >
       </div>
       <div class="src-ctl">
-        <span class="select"><select bind:value={microphone} aria-label="Microphone">
+        <span class="select"><select bind:value={microphone} disabled={!recordMicrophone} aria-label="Microphone">
           <option value="">System default</option>
           {#each sources?.microphones ?? [] as mic (mic.id)}
             <option value={mic.id}>{mic.label}</option>
           {/each}
         </select></span>
+        <Toggle bind:checked={recordMicrophone} label="Record the microphone" disabled={recordMicrophone && !recordSystemAudio} />
       </div>
     </div>
 
@@ -182,12 +202,12 @@
         <span class="src-title"
           ><b>System audio</b><InfoTip
             label="System audio"
-            text="Everyone else: the sound your Mac plays. Saved as its own track and labelled Them. Record all apps, or pick one from the apps running now."
+            text="Everyone else: the sound your Mac plays. Saved as its own track and labelled Them. Record all apps, or pick one from the apps running now. Turn it off for a meeting in the room or a recording on your own; with one track on, the transcript doesn't say who spoke."
           /></span
         >
       </div>
       <div class="src-ctl">
-        <span class="select"><select bind:value={app} aria-label="Record sound from">
+        <span class="select"><select bind:value={app} disabled={!recordSystemAudio} aria-label="Record sound from">
           <option value="">All apps</option>
           {#if appNotRunning}
             <option value={app}>{app} (not running)</option>
@@ -196,6 +216,7 @@
             <option value={a.id}>{a.label}</option>
           {/each}
         </select></span>
+        <Toggle bind:checked={recordSystemAudio} label="Record system audio" disabled={recordSystemAudio && !recordMicrophone} />
       </div>
     </div>
 

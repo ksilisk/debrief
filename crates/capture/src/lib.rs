@@ -78,7 +78,7 @@ pub fn sources() -> Result<Sources, CaptureError> {
 pub enum Permission {
     /// The Me track.
     Microphone,
-    /// The capture stream, which audio-only recordings need too.
+    /// The capture stream, which the microphone and the video need.
     ScreenRecording,
     /// The Them track.
     SystemAudio,
@@ -136,10 +136,19 @@ pub struct Video {
 }
 
 #[derive(Debug, Clone)]
+pub enum MicrophoneSource {
+    /// The system default, or the first microphone when there is none.
+    Default,
+    /// A microphone ID from [`sources`].
+    Device { id: String },
+}
+
+#[derive(Debug, Clone)]
 pub struct Options {
-    /// A microphone ID from [`sources`]; `None` uses the system default.
-    pub microphone: Option<String>,
-    pub system_audio: SystemAudio,
+    /// `None` records no microphone.
+    pub microphone: Option<MicrophoneSource>,
+    /// `None` records no system audio.
+    pub system_audio: Option<SystemAudio>,
     pub video: Option<Video>,
 }
 
@@ -167,8 +176,10 @@ pub trait Handler: Send + Sync + 'static {
 /// What the capture actually uses, after defaults and lookups.
 #[derive(Debug, Clone)]
 pub struct CaptureInfo {
-    pub microphone: String,
-    pub system_audio: String,
+    /// `None` when the microphone is not recorded.
+    pub microphone: Option<String>,
+    /// `None` when the system audio is not recorded.
+    pub system_audio: Option<String>,
     pub video: Option<String>,
 }
 

@@ -8,8 +8,12 @@ export type VideoSource = { kind: "screen"; id: number } | { kind: "window"; id:
 
 export interface Choices {
   title: string;
+  /** Off for a talk heard only through the Mac. */
+  recordMicrophone: boolean;
   /** A microphone ID; null uses the system default. */
   microphone: string | null;
+  /** Off for a meeting in the room or a recording on your own. */
+  recordSystemAudio: boolean;
   /** A bundle ID; null records all apps. */
   app: string | null;
   video: boolean;
@@ -40,8 +44,10 @@ export interface SourceList {
 export interface Live {
   folder: string;
   title: string;
-  microphone: string;
-  systemAudio: string;
+  /** null when the microphone is switched off. */
+  microphone: string | null;
+  /** null when the system audio is switched off. */
+  systemAudio: string | null;
   /** The recorded screen or window with its size and frame rate; null for audio only. */
   video: string | null;
 }

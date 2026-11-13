@@ -119,6 +119,20 @@ impl Transcript {
     pub fn echo_lines(&self) -> usize {
         self.segments.iter().filter(|segment| segment.echo).count()
     }
+
+    /// The one track that has lines when the other has none, because it was
+    /// switched off or heard no speech. Such lines don't say who spoke: "Me"
+    /// would be wrong for a room recorded by one microphone, and "Them" adds
+    /// nothing to a talk.
+    pub fn single_speaker(&self) -> Option<Track> {
+        let mut speakers = self
+            .segments
+            .iter()
+            .filter(|segment| !segment.echo)
+            .map(|segment| segment.speaker);
+        let first = speakers.next()?;
+        speakers.all(|speaker| speaker == first).then_some(first)
+    }
 }
 
 fn mark_echo(segments: &mut [Segment]) {

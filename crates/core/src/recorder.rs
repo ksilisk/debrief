@@ -34,11 +34,12 @@ pub trait CaptureControl: Sized {
     fn join_videos(parts: &[(PathBuf, f64)], output: &Path) -> Result<(), Self::Error>;
 }
 
-/// What the capture records, after its defaults and lookups.
+/// What the capture records, after its defaults and lookups. `None` is a
+/// source that is switched off.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Sources {
-    pub microphone: String,
-    pub system_audio: String,
+    pub microphone: Option<String>,
+    pub system_audio: Option<String>,
     pub video: Option<String>,
 }
 
@@ -106,8 +107,9 @@ pub struct Status {
     pub position: f64,
     pub paused: bool,
     pub marks: usize,
-    pub me: TrackStats,
-    pub them: TrackStats,
+    /// `None` for a track that isn't recorded.
+    pub me: Option<TrackStats>,
+    pub them: Option<TrackStats>,
     pub video_bytes: Option<u64>,
     /// The loudest sample of each track since the last call, from 0 to 1.
     pub me_peak: f32,
@@ -172,8 +174,14 @@ impl<C: CaptureControl> Recorder<C> {
         let saved = sink.with_session(|session| {
             session.update(|meeting| {
                 meeting.recording.started_at = started_at;
-                meeting.tracks.me.source = sources.microphone.clone();
-                meeting.tracks.them.source = sources.system_audio.clone();
+                for (track, source) in [
+                    (Track::Me, &sources.microphone),
+                    (Track::Them, &sources.system_audio),
+                ] {
+                    if let (Some(audio), Some(source)) = (meeting.tracks.get_mut(track), source) {
+                        audio.source = source.clone();
+                    }
+                }
                 if let (Some(video), Some(source)) = (&mut meeting.video, &sources.video) {
                     video.source = source.clone();
                 }
@@ -209,8 +217,8 @@ impl<C: CaptureControl> Recorder<C> {
                     session.position(at),
                     session.is_paused(),
                     session.meeting().marks.len(),
-                    session.stats(Track::Me).clone(),
-                    session.stats(Track::Them).clone(),
+                    session.stats(Track::Me).cloned(),
+                    session.stats(Track::Them).cloned(),
                 )
             })
             .unwrap_or_default();
@@ -333,8 +341,8 @@ mod tests {
 
         fn sources(&self) -> Sources {
             Sources {
-                microphone: "Test microphone".into(),
-                system_audio: "All apps".into(),
+                microphone: Some("Test microphone".into()),
+                system_audio: Some("All apps".into()),
                 video: self.video.as_ref().map(|_| "Display 1".into()),
             }
         }
@@ -429,7 +437,10 @@ mod tests {
         assert_eq!(saved, stopped.meeting);
         assert!((saved.recording.duration_seconds - 3.0).abs() < 0.02);
         assert_eq!(saved.pauses.len(), 1);
-        assert_eq!(saved.tracks.me.source, "Test microphone");
+        assert_eq!(
+            saved.tracks.me.as_ref().map(|me| me.source.as_str()),
+            Some("Test microphone")
+        );
         let video = saved.video.expect("video");
         assert_eq!(video.source, "Display 1");
         assert!(video.parts.is_empty());

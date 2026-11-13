@@ -9,7 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::Local;
-use debrief_capture::{Capture, CaptureError, Options, SystemAudio, Video, VideoTarget};
+use debrief_capture::{
+    Capture, CaptureError, MicrophoneSource, Options, SystemAudio, Video, VideoTarget,
+};
 use debrief_core::meeting::{self, Language, Meeting, Settings, VIDEO_FILE, VideoFile};
 use debrief_core::recorder::{Recorder, RecorderError, Status};
 use debrief_summarize::config::{self, Provider, RecordingSettings};
@@ -34,7 +36,9 @@ const FAILED: &str = "recording-failed";
 #[serde(rename_all = "camelCase")]
 pub struct Choices {
     pub title: String,
+    pub record_microphone: bool,
     pub microphone: Option<String>,
+    pub record_system_audio: bool,
     pub app: Option<String>,
     pub video: bool,
     pub fps: u32,
@@ -54,7 +58,9 @@ pub enum VideoSource {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Defaults {
+    pub record_microphone: bool,
     pub microphone: Option<String>,
+    pub record_system_audio: bool,
     pub app: Option<String>,
     pub video: bool,
     pub fps: u32,
@@ -86,8 +92,10 @@ pub struct Choice<T> {
 pub struct Live {
     pub folder: String,
     pub title: String,
-    pub microphone: String,
-    pub system_audio: String,
+    /// `None` when the microphone is switched off.
+    pub microphone: Option<String>,
+    /// `None` when the system audio is switched off.
+    pub system_audio: Option<String>,
     /// The recorded screen or window with its size and frame rate; `None` for audio only.
     pub video: Option<String>,
 }
@@ -113,7 +121,12 @@ impl From<&Status> for LiveStatus {
             marks: status.marks,
             me_level: status.me_peak,
             them_level: status.them_peak,
-            bytes: status.me.bytes() + status.them.bytes() + status.video_bytes.unwrap_or(0),
+            bytes: [&status.me, &status.them]
+                .into_iter()
+                .flatten()
+                .map(|stats| stats.bytes())
+                .sum::<u64>()
+                + status.video_bytes.unwrap_or(0),
         }
     }
 }
@@ -162,7 +175,9 @@ pub fn defaults() -> Defaults {
         .provider
         .map(|_| settings.summary.model.clone());
     Defaults {
+        record_microphone: recording.record_microphone,
         microphone: recording.microphone,
+        record_system_audio: recording.record_system_audio,
         app: recording.app,
         video: recording.video,
         fps: recording.fps,
@@ -170,6 +185,17 @@ pub fn defaults() -> Defaults {
         language: recording.language,
         summary_model,
         summary_provider: settings.summary.provider,
+    }
+}
+
+/// What the next Start from the menu or the shortcut leaves out, if anything.
+pub fn switched_off() -> Option<&'static str> {
+    let defaults = defaults();
+    match (defaults.record_microphone, defaults.record_system_audio) {
+        (true, true) => None,
+        (false, true) => Some("microphone off"),
+        (true, false) => Some("system audio off"),
+        (false, false) => Some("microphone and system audio off"),
     }
 }
 
@@ -227,7 +253,9 @@ pub fn start_with_defaults(app: &AppHandle) {
     let defaults = defaults();
     let choices = Choices {
         title: String::new(),
+        record_microphone: defaults.record_microphone,
         microphone: defaults.microphone,
+        record_system_audio: defaults.record_system_audio,
         app: defaults.app,
         video: defaults.video,
         fps: defaults.fps,
@@ -257,6 +285,11 @@ pub fn start(app: &AppHandle, choices: Choices) -> Result<(), String> {
 }
 
 fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), String> {
+    if !choices.record_microphone && !choices.record_system_audio {
+        return Err(
+            "Turn on the microphone or the system audio: there is nothing to transcribe.".into(),
+        );
+    }
     remember(&choices);
     let pressed_at = Local::now().fixed_offset();
     let library = config::library().map_err(|error| error.to_string())?;
@@ -271,6 +304,12 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
             language: choices.language,
         },
     );
+    if !choices.record_microphone {
+        draft.tracks.me = None;
+    }
+    if !choices.record_system_audio {
+        draft.tracks.them = None;
+    }
     draft.video = choices.video.then(|| VideoFile {
         file: VIDEO_FILE.to_string(),
         source: String::new(),
@@ -285,13 +324,18 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
     };
     let recorder = Recorder::start(&folder, draft, |video, sink| {
         let options = Options {
-            microphone: choices.microphone.clone(),
-            system_audio: match &choices.app {
+            microphone: choices
+                .record_microphone
+                .then(|| match &choices.microphone {
+                    Some(id) => MicrophoneSource::Device { id: id.clone() },
+                    None => MicrophoneSource::Default,
+                }),
+            system_audio: choices.record_system_audio.then(|| match &choices.app {
                 Some(bundle_id) => SystemAudio::App {
                     bundle_id: bundle_id.clone(),
                 },
                 None => SystemAudio::AllApps,
-            },
+            }),
             video: video.map(|path| Video {
                 target,
                 fps: choices.fps,
@@ -483,7 +527,9 @@ fn remember(choices: &Choices) {
         return;
     };
     settings.recording = RecordingSettings {
+        record_microphone: choices.record_microphone,
         microphone: choices.microphone.clone(),
+        record_system_audio: choices.record_system_audio,
         app: choices.app.clone(),
         video: choices.video,
         fps: choices.fps,

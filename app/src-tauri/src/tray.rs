@@ -94,10 +94,15 @@ fn item(action: Action, label: &'static str, keys: Option<&'static str>) -> Entr
     }
 }
 
-fn entries(phase: &Phase, recent: &[Recent]) -> Vec<Entry> {
+/// `switched_off` names the sources the next Start leaves out, for example
+/// "microphone off", so a talk's settings don't silently carry into a call.
+fn entries(phase: &Phase, recent: &[Recent], switched_off: Option<&str>) -> Vec<Entry> {
     let mut entries = match phase {
         Phase::Idle => vec![
-            Entry::Status("Ready to record".into()),
+            Entry::Status(match switched_off {
+                Some(note) => format!("Ready to record · {note}"),
+                None => "Ready to record".into(),
+            }),
             item(Action::Start, "Start recording", Some(START_OR_STOP_KEYS)),
         ],
         Phase::Recording {
@@ -228,7 +233,11 @@ fn render(app: &AppHandle, shown: &mut ShownState) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(ID) else {
         return Ok(());
     };
-    let entries = entries(&shown.phase, &shown.recent);
+    let switched_off = match shown.phase {
+        Phase::Idle => crate::recording::switched_off(),
+        _ => None,
+    };
+    let entries = entries(&shown.phase, &shown.recent, switched_off);
 
     // Red only while sound is being recorded; otherwise a template icon that follows the menu bar.
     let recording_icon = matches!(shown.phase, Phase::Recording { paused: false, .. });
@@ -315,7 +324,7 @@ mod tests {
     use super::*;
 
     fn actions(phase: &Phase) -> Vec<Action> {
-        entries(phase, &[])
+        entries(phase, &[], None)
             .into_iter()
             .filter_map(|entry| match entry {
                 Entry::Item { action, .. } => Some(action),
@@ -335,7 +344,7 @@ mod tests {
     #[test]
     fn idle_menu_offers_start() {
         assert_eq!(
-            entries(&Phase::Idle, &[])[0],
+            entries(&Phase::Idle, &[], None)[0],
             Entry::Status("Ready to record".into())
         );
         assert_eq!(
@@ -351,9 +360,17 @@ mod tests {
     }
 
     #[test]
+    fn idle_menu_says_what_the_next_start_leaves_out() {
+        assert_eq!(
+            entries(&Phase::Idle, &[], Some("microphone off"))[0],
+            Entry::Status("Ready to record · microphone off".into())
+        );
+    }
+
+    #[test]
     fn recording_menu_shows_time_and_controls() {
         let phase = recording(false);
-        let entries = entries(&phase, &[]);
+        let entries = entries(&phase, &[], None);
         assert_eq!(entries[0], Entry::Status("Recording · 00:23:41".into()));
         assert_eq!(entries[1], Entry::Status("Sprint planning".into()));
         assert_eq!(
@@ -373,7 +390,7 @@ mod tests {
     #[test]
     fn paused_recording_offers_resume() {
         let phase = recording(true);
-        let entries = entries(&phase, &[]);
+        let entries = entries(&phase, &[], None);
         assert_eq!(entries[0], Entry::Status("Paused · 00:23:41".into()));
         assert!(entries.contains(&item(Action::Pause, "Resume", None)));
         assert_eq!(title(&phase).as_deref(), Some("Paused 00:23:41"));
@@ -387,7 +404,7 @@ mod tests {
             percent: Some(61),
         };
         assert_eq!(
-            entries(&phase, &[])[0],
+            entries(&phase, &[], None)[0],
             Entry::Status("Transcribing · 61%".into())
         );
         assert_eq!(
@@ -405,16 +422,16 @@ mod tests {
             paused: false,
         };
         assert!(same_items(
-            &entries(&recording(false), &[]),
-            &entries(&later, &[])
+            &entries(&recording(false), &[], None),
+            &entries(&later, &[], None)
         ));
         assert!(!same_items(
-            &entries(&recording(false), &[]),
-            &entries(&recording(true), &[])
+            &entries(&recording(false), &[], None),
+            &entries(&recording(true), &[], None)
         ));
         assert!(!same_items(
-            &entries(&Phase::Idle, &[]),
-            &entries(&later, &[])
+            &entries(&Phase::Idle, &[], None),
+            &entries(&later, &[], None)
         ));
     }
 

@@ -133,8 +133,42 @@ impl FromStr for Language {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioTracks {
-    pub me: AudioTrack,
-    pub them: AudioTrack,
+    /// `None` when the microphone was switched off.
+    pub me: Option<AudioTrack>,
+    /// `None` when the system audio was switched off.
+    pub them: Option<AudioTrack>,
+}
+
+impl AudioTracks {
+    pub fn get(&self, track: Track) -> Option<&AudioTrack> {
+        match track {
+            Track::Me => self.me.as_ref(),
+            Track::Them => self.them.as_ref(),
+        }
+    }
+
+    pub fn get_mut(&mut self, track: Track) -> Option<&mut AudioTrack> {
+        match track {
+            Track::Me => self.me.as_mut(),
+            Track::Them => self.them.as_mut(),
+        }
+    }
+
+    /// The tracks that were recorded, Me first.
+    pub fn recorded(&self) -> impl Iterator<Item = (Track, &AudioTrack)> {
+        [Track::Me, Track::Them]
+            .into_iter()
+            .filter_map(|track| self.get(track).map(|audio| (track, audio)))
+    }
+
+    /// The one track recorded when the other was switched off.
+    pub fn only(&self) -> Option<Track> {
+        match (&self.me, &self.them) {
+            (Some(_), None) => Some(Track::Me),
+            (None, Some(_)) => Some(Track::Them),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,8 +295,8 @@ impl Meeting {
             },
             settings,
             tracks: AudioTracks {
-                me: AudioTrack::new(Track::Me),
-                them: AudioTrack::new(Track::Them),
+                me: Some(AudioTrack::new(Track::Me)),
+                them: Some(AudioTrack::new(Track::Them)),
             },
             video: None,
             marks: Vec::new(),
@@ -451,8 +485,12 @@ mod tests {
                 language: Language::Russian,
             },
         );
-        meeting.tracks.me.source = "MacBook Pro Microphone".into();
-        meeting.tracks.them.source = "Zoom (us.zoom.xos)".into();
+        if let Some(me) = &mut meeting.tracks.me {
+            me.source = "MacBook Pro Microphone".into();
+        }
+        if let Some(them) = &mut meeting.tracks.them {
+            them.source = "Zoom (us.zoom.xos)".into();
+        }
         meeting.marks.push(Mark { at_seconds: 870.0 });
         meeting
     }
@@ -542,10 +580,27 @@ mod tests {
         fs::write(folder.join(MEETING_FILE), json).expect("write");
         let meeting = Meeting::load(&folder).expect("load");
         assert_eq!(meeting.settings.language, Language::Russian);
-        assert_eq!(meeting.tracks.them.file, "them.m4a");
+        assert_eq!(
+            meeting.tracks.get(Track::Them).map(|t| t.file.as_str()),
+            Some("them.m4a")
+        );
+        assert_eq!(meeting.tracks.only(), None);
         assert_eq!(meeting.marks, vec![Mark { at_seconds: 870.0 }]);
         assert_eq!(meeting.status(Step::Transcribe), StepStatus::Done);
         assert_eq!(meeting.next_step(), Some(Step::Merge));
+    }
+
+    #[test]
+    fn a_switched_off_track_is_saved_as_null() {
+        let folder = temp_folder("meeting-one-track");
+        let mut meeting = sample();
+        meeting.tracks.them = None;
+        meeting.save(&folder).expect("save");
+        let json = fs::read_to_string(folder.join(MEETING_FILE)).expect("read");
+        assert!(json.contains(r#""them": null"#), "{json}");
+        let loaded = Meeting::load(&folder).expect("load");
+        assert_eq!(loaded.tracks.only(), Some(Track::Me));
+        assert_eq!(loaded.tracks.recorded().count(), 1);
     }
 
     #[test]

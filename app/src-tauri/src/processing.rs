@@ -364,6 +364,8 @@ struct Tracker<'a> {
     /// Where transcribing stood at the first progress event, for the time left.
     first_fraction: Option<f32>,
     last_sent: Instant,
+    /// The tracks that get transcribed, in order.
+    tracks: Vec<Track>,
 }
 
 impl<'a> Tracker<'a> {
@@ -409,7 +411,17 @@ impl<'a> Tracker<'a> {
             started: Instant::now(),
             first_fraction: None,
             last_sent: Instant::now(),
+            tracks: match &meeting {
+                Some(meeting) => meeting.tracks.recorded().map(|(track, _)| track).collect(),
+                None => vec![Track::Me, Track::Them],
+            },
         }
+    }
+
+    /// How much of the transcribing is done, from 0 to 1, over all tracks.
+    fn transcribed(&self, track: Track, done: f32) -> f32 {
+        let index = self.tracks.iter().position(|&t| t == track).unwrap_or(0);
+        (index as f32 + done) / self.tracks.len().max(1) as f32
     }
 
     fn event(&mut self, event: Event) {
@@ -426,7 +438,7 @@ impl<'a> Tracker<'a> {
             Event::Transcribing { track, done } => {
                 self.progress.track = Some(track);
                 self.progress.track_done = done;
-                let fraction = (track_index(track) + done) / 2.0;
+                let fraction = self.transcribed(track, done);
                 let first = *self.first_fraction.get_or_insert(fraction);
                 let elapsed = self.started.elapsed().as_secs_f32();
                 self.progress.seconds_left = (fraction - first > 0.02)
@@ -460,7 +472,7 @@ impl<'a> Tracker<'a> {
         let finished = |step| matches!(status(step), StepStatus::Done | StepStatus::Skipped);
         let share = if !finished(Step::Transcribe) {
             match self.progress.track {
-                Some(track) => (track_index(track) + self.progress.track_done) / 2.0 * 0.9,
+                Some(track) => self.transcribed(track, self.progress.track_done) * 0.9,
                 None => 0.0,
             }
         } else if !finished(Step::Export) {
@@ -490,13 +502,6 @@ impl<'a> Tracker<'a> {
                 },
             );
         }
-    }
-}
-
-fn track_index(track: Track) -> f32 {
-    match track {
-        Track::Me => 0.0,
-        Track::Them => 1.0,
     }
 }
 

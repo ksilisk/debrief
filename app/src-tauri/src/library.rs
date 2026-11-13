@@ -61,6 +61,10 @@ pub struct Details {
     /// The prompt from Settings.
     pub default_prompt: String,
     pub segments: Vec<SegmentView>,
+    /// Whether lines say who spoke: only when both tracks have lines.
+    pub labelled: bool,
+    /// The one track recorded when the other was switched off.
+    pub only_track: Option<Track>,
     pub marks: Vec<f64>,
     pub files: Vec<FileView>,
     /// RFC 3339; when the storage cleanup deleted the audio and video.
@@ -139,6 +143,9 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Resul
             heard.push(segment.language.clone());
         }
     }
+    let labelled = transcript
+        .as_ref()
+        .is_none_or(|transcript| transcript.single_speaker().is_none());
     Ok(Details {
         item: item(folder, &meeting, queued),
         video: meeting.video.as_ref().map(|video| video.source.clone()),
@@ -175,6 +182,8 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Resul
                     .collect()
             })
             .unwrap_or_default(),
+        labelled,
+        only_track: meeting.tracks.only(),
         marks: meeting.marks.iter().map(|mark| mark.at_seconds).collect(),
         files: files(folder),
         files_deleted_at: meeting.recording.files_deleted_at.map(|at| at.to_rfc3339()),

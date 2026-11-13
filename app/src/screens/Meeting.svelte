@@ -122,10 +122,11 @@
     if (!details) return "";
     const fps = details.video ? /(\d+) fps/.exec(details.video)?.[1] : null;
     const languages = details.heard.length > 0 ? details.heard : [details.language];
+    const audio = details.onlyTrack === "me" ? "microphone" : details.onlyTrack === "them" ? "system audio" : "audio";
     return [
       longDate(details.startedAt),
       duration(details.durationSeconds),
-      details.video ? `audio + video${fps ? ` ${fps} fps` : ""}` : "audio only",
+      details.video ? `${audio} + video${fps ? ` ${fps} fps` : ""}` : `${audio} only`,
       languages.map(languageName).join(" + "),
     ].join(" · ");
   });
@@ -201,7 +202,8 @@
 
   function fileNote(name: string): string {
     if (/^screen-\d+\.mp4$/.test(name)) return "A video part that could not be joined";
-    if (name === "transcript.srt" && details?.filesDeletedAt) return "Subtitles";
+    if (name === "transcript.srt" && (details?.filesDeletedAt || !details?.video)) return "Subtitles";
+    if (name === "transcript.md" && details && !details.labelled) return "Lines with timecodes";
     return fileNotes[name] ?? "";
   }
 
@@ -261,7 +263,11 @@
       <li class={statusOf("merge")}>
         <span class="st"></span>
         <div>
-          <b>Merging Me and Them, removing echo lines</b><span class="d">Lines both tracks heard at the same moment are dropped from Me</span>
+          {#if details?.onlyTrack}
+            <b>Putting the lines in order</b><span class="d">One track was recorded, so there are no echo lines to remove</span>
+          {:else}
+            <b>Merging Me and Them, removing echo lines</b><span class="d">Lines both tracks heard at the same moment are dropped from Me</span>
+          {/if}
         </div>
       </li>
       <li class={statusOf("export")}>
@@ -387,14 +393,16 @@
         {#if details.segments.length === 0}
           <p class="sub">No speech was found in this recording.</p>
         {:else}
-          <div class="tx">
+          <div class="tx" class:unlabelled={!details.labelled}>
             {#each rows as row, i (i)}
               {#if row.kind === "mark"}
                 <div class="tx-mark">★ {clock(row.at)} · Marked moment</div>
               {:else}
                 <div class="tx-line" class:echo={row.segment.echo}>
                   <span class="tc">{clock(row.segment.start)}</span>
-                  <span class="who {row.segment.speaker}">{row.segment.speaker === "me" ? "Me" : "Them"}</span>
+                  {#if details.labelled}
+                    <span class="who {row.segment.speaker}">{row.segment.speaker === "me" ? "Me" : "Them"}</span>
+                  {/if}
                   <span class="say">{row.segment.text}{#if row.segment.echo}<span class="tag">echo, removed</span>{/if}</span>
                 </div>
               {/if}
@@ -791,6 +799,10 @@
     border-bottom: 1px solid var(--soft);
     font-size: 13px;
     line-height: 1.6;
+  }
+
+  .unlabelled .tx-line {
+    grid-template-columns: 70px minmax(0, 1fr);
   }
 
   .tx-line.echo .say {

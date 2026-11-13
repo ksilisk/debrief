@@ -156,8 +156,8 @@ pub fn process(
                     },
                 )?;
             }
-            Step::Merge => run_step(&mut meeting, folder, step, None, on_event, |_, _| {
-                merge(folder)
+            Step::Merge => run_step(&mut meeting, folder, step, None, on_event, |meeting, _| {
+                merge(folder, meeting)
             })?,
             Step::Export => run_step(&mut meeting, folder, step, None, on_event, |meeting, _| {
                 export_files(folder, meeting)
@@ -303,10 +303,7 @@ fn transcribe_tracks(
     on_event: &mut dyn FnMut(Event),
 ) -> Result<(), ProcessError> {
     let language = meeting.settings.language;
-    for (track, audio_track) in [
-        (Track::Me, &meeting.tracks.me),
-        (Track::Them, &meeting.tracks.them),
-    ] {
+    for (track, audio_track) in meeting.tracks.recorded() {
         let path = work_file(folder, track);
         if read_track_text(&path).is_ok() {
             on_event(Event::Transcribing { track, done: 1.0 });
@@ -373,10 +370,12 @@ fn within_audio(mut text: TrackText, seconds: f64) -> TrackText {
     text
 }
 
-fn merge(folder: &Path) -> Result<(), ProcessError> {
-    let me = read_track_text(&work_file(folder, Track::Me))?;
-    let them = read_track_text(&work_file(folder, Track::Them))?;
-    Transcript::merge(me, them).save(folder)?;
+fn merge(folder: &Path, meeting: &Meeting) -> Result<(), ProcessError> {
+    let text = |track: Track| match meeting.tracks.get(track) {
+        Some(_) => read_track_text(&work_file(folder, track)),
+        None => Ok(TrackText::default()),
+    };
+    Transcript::merge(text(Track::Me)?, text(Track::Them)?).save(folder)?;
     let _ = fs::remove_dir_all(folder.join(WORK_FOLDER));
     Ok(())
 }
@@ -535,6 +534,32 @@ mod tests {
         assert!(events.contains(&Event::Started(Step::Transcribe)));
         assert_eq!(events.last(), Some(&Event::Finished(Step::Export)));
         assert_eq!(Meeting::load(&folder).expect("load"), meeting);
+    }
+
+    #[test]
+    fn a_meeting_without_system_audio_transcribes_only_the_microphone() {
+        let folder = recorded_meeting("process-one-track");
+        let mut meeting = Meeting::load(&folder).expect("load");
+        meeting.tracks.them = None;
+        meeting.save(&folder).expect("save");
+        fs::remove_file(folder.join(Track::Them.file_name())).expect("remove them.wav");
+
+        let mut fake = Fake::default();
+        let (result, events) = run(&folder, &mut fake);
+        result.expect("process");
+        assert_eq!(fake.calls, 1);
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Event::Transcribing {
+                track: Track::Them,
+                ..
+            }
+        )));
+        let transcript = Transcript::load(&folder).expect("load");
+        assert_eq!(transcript.single_speaker(), Some(Track::Me));
+        let text = fs::read_to_string(folder.join(TEXT_FILE)).expect("read");
+        assert!(text.contains("Microphone only"), "{text}");
+        assert!(text.contains("00:00:00  16000 samples"), "{text}");
     }
 
     #[test]

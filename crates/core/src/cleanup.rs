@@ -161,16 +161,15 @@ fn recordings(folder: &Path, meeting: &Meeting) -> Vec<PathBuf> {
         std::iter::once(video.file.as_str())
             .chain(video.parts.iter().map(|part| part.file.as_str()))
     });
-    let mut paths: Vec<PathBuf> = [
-        meeting.tracks.me.file.as_str(),
-        meeting.tracks.them.file.as_str(),
-    ]
-    .into_iter()
-    .chain(video)
-    .filter(|name| is_plain_name(name))
-    .map(|name| folder.join(name))
-    .filter(|path| path.is_file())
-    .collect();
+    let mut paths: Vec<PathBuf> = meeting
+        .tracks
+        .recorded()
+        .map(|(_, audio)| audio.file.as_str())
+        .chain(video)
+        .filter(|name| is_plain_name(name))
+        .map(|name| folder.join(name))
+        .filter(|path| path.is_file())
+        .collect();
     paths.sort();
     paths.dedup();
     paths
@@ -316,8 +315,12 @@ mod tests {
         let old = meeting_in(&library, "old", 40, true);
         fs::write(library.join("outside.wav"), "keep").expect("write");
         let mut meeting = Meeting::load(&old).expect("load");
-        meeting.tracks.me.file = "../outside.wav".into();
-        meeting.tracks.them.file = "/tmp/them.wav".into();
+        if let Some(me) = &mut meeting.tracks.me {
+            me.file = "../outside.wav".into();
+        }
+        if let Some(them) = &mut meeting.tracks.them {
+            them.file = "/tmp/them.wav".into();
+        }
         meeting.save(&old).expect("save");
         let due = due(&library, rule(Delete::Recordings), now(), &|_| false);
         assert!(

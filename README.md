@@ -29,7 +29,7 @@
 
 ### 1. Start a recording
 
-Choose a microphone, the call audio (all apps or just one) and, if you like, screen video at 5 or 10 frames per second. Press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>R</kbd> in any app to start or stop.
+Choose a microphone, the call audio (all apps or just one) and, if you like, screen video at 5 or 10 frames per second. For a meeting in the room, turn off the call audio; for a talk you only listen to, turn off the microphone. Press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>R</kbd> in any app to start or stop.
 
 ![The New recording screen](docs/images/new-recording.png)
 
