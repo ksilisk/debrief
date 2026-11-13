@@ -1,5 +1,6 @@
-//! Silero VAD, and the audio Whisper gets: only the speech, joined the way
-//! whisper.cpp's own VAD joins it, with Whisper's times mapped back to the track.
+//! Silero VAD, and the audio Whisper gets: only the speech, each segment at the
+//! same level, joined the way whisper.cpp's own VAD joins it, with Whisper's
+//! times mapped back to the track.
 
 use std::ffi::{c_int, c_void};
 use std::ptr::NonNull;
@@ -15,6 +16,13 @@ const MODEL: &[u8] = include_bytes!("../assets/ggml-silero-v5.1.2.bin");
 /// the audio it was tested with.
 const OVERLAP_SAMPLES: usize = 1_600;
 const GAP_SAMPLES: usize = 1_600;
+
+/// Each speech segment is brought to this level. When one microphone records a
+/// room, a voice far from it otherwise reaches Whisper much quieter than the
+/// near one, and Whisper guesses its words or leaves them out.
+const LEVEL_DBFS: f32 = -20.0;
+/// Near-silent segments are raised by no more than this.
+const MAX_GAIN_DB: f32 = 30.0;
 
 /// A line edge this close to the start or end of speech is taken as right.
 const NEAR_SECONDS: f64 = 0.3;
@@ -155,7 +163,9 @@ impl Joined {
                 start,
                 length: end - start,
             });
-            joined.extend_from_slice(&audio[start..end]);
+            let segment = &audio[start..end];
+            let gain = gain(segment);
+            joined.extend(segment.iter().map(|value| (value * gain).clamp(-1.0, 1.0)));
             if more {
                 joined.resize(joined.len() + GAP_SAMPLES, 0.0);
             }
@@ -187,6 +197,15 @@ impl Joined {
         }
         before.unwrap_or(seconds)
     }
+}
+
+fn gain(segment: &[f32]) -> f32 {
+    let power = segment.iter().map(|value| value * value).sum::<f32>() / segment.len() as f32;
+    (from_db(LEVEL_DBFS) / power.sqrt().max(f32::MIN_POSITIVE)).min(from_db(MAX_GAIN_DB))
+}
+
+fn from_db(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
 }
 
 /// whisper.cpp's `cs_to_samples`: segment times are whole centiseconds.
@@ -243,16 +262,46 @@ mod tests {
         assert_eq!(vad.speech(&silence), Some(Vec::new()));
     }
 
+    fn tone(seconds: f64, amplitude: f32) -> Vec<f32> {
+        (0..(seconds * f64::from(WHISPER_RATE)) as usize)
+            .map(|i| amplitude * (i as f32 * 0.09).sin())
+            .collect()
+    }
+
+    fn level_db(samples: &[f32]) -> f32 {
+        let power = samples.iter().map(|v| v * v).sum::<f32>() / samples.len() as f32;
+        10.0 * power.log10()
+    }
+
     #[test]
     fn speech_is_joined_like_whisper_cpp_joins_it() {
-        let audio: Vec<f32> = (0..16_000 * 10).map(|i| i as f32).collect();
+        let audio: Vec<f32> = (0..16_000 * 10).map(|i| i as f32 / 1e6).collect();
         let joined = Joined::new(&audio, &[span(1.0, 2.0), span(5.0, 6.5)]);
+        let first = gain(&audio[16_000..33_600]);
+        let second = gain(&audio[80_000..104_000]);
         // 1 s of speech + 0.1 s after it + 0.1 s gap + 1.5 s of speech.
         assert_eq!(joined.audio.len(), 16_000 + 1_600 + 1_600 + 24_000);
-        assert_eq!(joined.audio[0], 16_000.0);
-        assert_eq!(joined.audio[17_599], 33_599.0);
+        assert_eq!(joined.audio[0], audio[16_000] * first);
+        assert_eq!(joined.audio[17_599], audio[33_599] * first);
         assert_eq!(joined.audio[17_600..19_200], [0.0; 1_600]);
-        assert_eq!(joined.audio[19_200], 80_000.0);
+        assert_eq!(joined.audio[19_200], audio[80_000] * second);
+    }
+
+    #[test]
+    fn far_and_near_voices_reach_whisper_at_the_same_level() {
+        let mut audio = tone(2.0, 0.01);
+        audio.extend(tone(2.0, 0.3));
+        let joined = Joined::new(&audio, &[span(0.5, 1.5), span(2.5, 3.5)]);
+        assert!((level_db(&joined.audio[..17_600]) - LEVEL_DBFS).abs() < 0.1);
+        assert!((level_db(&joined.audio[19_200..]) - LEVEL_DBFS).abs() < 0.1);
+    }
+
+    #[test]
+    fn near_silence_is_raised_by_30_db_at_most() {
+        let audio = tone(2.0, 0.000_1);
+        let joined = Joined::new(&audio, &[span(0.5, 1.5)]);
+        let raised = level_db(&joined.audio) - level_db(&audio[8_000..24_000]);
+        assert!((raised - MAX_GAIN_DB).abs() < 0.1, "raised by {raised} dB");
     }
 
     #[test]

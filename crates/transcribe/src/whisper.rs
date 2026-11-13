@@ -14,6 +14,10 @@ use crate::speech::{Joined, Span, Vad, snap};
 
 const MAX_THREADS: usize = 8;
 const BEST_OF: c_int = 5;
+/// Whisper reads its own latest text before each window. With the default
+/// (about 224 tokens) a quick back-and-forth on one track fills it with short
+/// replies, Whisper starts repeating them, and whole minutes come out empty.
+const CARRIED_TOKENS: c_int = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -133,6 +137,7 @@ impl Transcriber for Whisper {
             sys::whisper_full_default_params(sys::whisper_sampling_strategy_WHISPER_SAMPLING_GREEDY)
         };
         params.greedy.best_of = BEST_OF;
+        params.n_max_text_ctx = CARRIED_TOKENS;
         params.language = language_code(language).as_ptr();
         params.n_threads = self.threads;
         params.print_progress = false;
