@@ -1,4 +1,4 @@
-//! What both providers share: the HTTP client, retries, error messages and the
+//! What all providers share: the HTTP client, retries, error messages and the
 //! server-sent events their streams use.
 
 use std::io::{self, BufRead, BufReader, Read};
@@ -15,7 +15,7 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
-    #[error("could not reach the provider: {0}")]
+    #[error("could not reach the provider: {}", cause(.0))]
     Network(#[source] reqwest::Error),
     #[error("the API key was rejected ({status}): {message}")]
     Key { status: u16, message: String },
@@ -25,6 +25,15 @@ pub enum HttpError {
     Stream(#[source] io::Error),
     #[error("{0}")]
     Answer(String),
+}
+
+/// reqwest's own message only names the URL; the reason is in its sources.
+fn cause(error: &reqwest::Error) -> String {
+    let mut reason: &dyn std::error::Error = error;
+    while let Some(source) = reason.source() {
+        reason = source;
+    }
+    reason.to_string()
 }
 
 pub fn client() -> Result<Client, HttpError> {

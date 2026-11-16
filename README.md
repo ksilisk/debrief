@@ -22,7 +22,7 @@
 - **Works with any call app.** Zoom, Google Meet, Teams, Telegram or a browser tab: Debrief records the sound on your Mac. No bot joins your call.
 - **Knows who spoke.** Your microphone (“Me”) and the sound of the call (“Them”) are recorded as separate tracks. When your microphone picks up the speakers, Debrief removes those repeated lines.
 - **Private.** Whisper turns speech into text on your Mac. Audio and video never leave it.
-- **Summaries only when you ask.** Click **Write summary** and the transcript goes to OpenAI or Claude, with a prompt you can change for each meeting.
+- **Summaries only when you ask.** Click **Write summary** and the transcript goes to OpenAI, Claude, OpenRouter or your own OpenAI-compatible server, with a prompt you can change for each meeting.
 - **Plain files.** Each meeting is a folder of Markdown, text and subtitle files. No account, no cloud and nothing to export.
 
 ## How it works
@@ -70,11 +70,11 @@ You need a Mac with Apple silicon (M1 or later) and macOS 15 Sequoia or later.
 ## Your data
 
 - Recording and transcription happen on your Mac. Nothing is uploaded.
-- When you click **Write summary**, only the transcript text is sent, and only to the provider you set up. The app shows where it goes before you click.
-- Your API key is kept in a file that only your macOS user can read, never in the meeting folders.
+- When you click **Write summary**, only the transcript text is sent, and only to the provider you set up. The app shows where it goes before you click. With a server on your Mac, such as Ollama or LM Studio, it stays on your Mac.
+- Your API keys are kept in a file that only your macOS user can read, never in the meeting folders. A server's key is sent only to that server.
 - There is no account and no analytics. Besides summaries, Debrief goes online only to download a speech model (from Hugging Face) and to check for updates (on GitHub).
 
-![Settings: speech models on this Mac and the summary provider](docs/images/settings.png)
+![Settings: speech models on this Mac and a summary server on this Mac (Ollama)](docs/images/settings.png)
 
 ## What you get
 
@@ -88,7 +88,7 @@ Each meeting gets its own folder, such as `2026-11-11 10-00 Weekly product sync`
 - **Languages.** Choose Russian, English or Auto for each meeting. With Auto, each side can speak its own language, but a track that switches languages midway is not handled well yet.
 - **Disk space.** Audio is saved as WAV, about 700 MB per hour for both tracks. Screen video adds about 0.6 to 1.3 GB per hour. Settings can move old recordings to the Trash after 30 days, 90 days or a year, and keep the transcripts and summaries.
 - **Platforms.** macOS only for now. Windows and Linux are planned.
-- **Summary providers.** OpenAI and Claude for now. More, including local models, are planned.
+- **Summary providers.** OpenAI, Claude, OpenRouter, and any number of OpenAI-compatible servers: local ones such as Ollama, LM Studio or llama.cpp, or remote ones. Add a server in Settings with its address (usually ending in `/v1`); the API key is optional. Local models often read less text at once, so a long meeting may not fit: set Model context to what the server really uses.
 
 ## Command line
 

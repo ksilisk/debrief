@@ -2,7 +2,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export type Provider = "openai" | "anthropic";
+export type Provider = "openai" | "anthropic" | "openrouter" | "server";
+/** The providers with a fixed address and a required key. */
+export type Hosted = Exclude<Provider, "server">;
 export type Delete = "recordings" | "meeting";
 
 export interface SettingsView {
@@ -14,10 +16,13 @@ export interface SettingsView {
   summary: {
     /** null until summaries are set up. */
     provider: Provider | null;
+    /** With the "server" provider. */
+    server: number | null;
     model: string;
     contextTokens: number;
     /** The saved keys, masked. */
-    keys: Record<Provider, string | null>;
+    keys: Record<Hosted, string | null>;
+    servers: ServerView[];
   };
   cleanup: {
     /** null never deletes anything. */
@@ -35,9 +40,31 @@ export interface Changes {
   contextTokens?: number;
 }
 
+export interface ServerView {
+  id: number;
+  label: string;
+  url: string;
+  /** The label, or the host. */
+  name: string;
+  /** Masked; null when the server has no key. */
+  key: string | null;
+}
+
+/** What Test connection checks; a server as typed, with a null id when it's new. */
+export interface Target {
+  provider: Provider;
+  server: { id: number | null; label: string; url: string } | null;
+}
+
+export interface ModelList {
+  models: ModelView[];
+  /** The server's id; a new server has one now. */
+  server: number | null;
+}
+
 export interface ModelView {
   id: string;
-  /** Known for Claude models; OpenAI doesn't list it. */
+  /** Listed by Claude, OpenRouter and some servers; not by OpenAI. */
   contextTokens: number | null;
   answerTokens: number;
   suggested: boolean;
@@ -45,23 +72,46 @@ export interface ModelView {
 
 export interface ModelChoice {
   provider: Provider;
+  /** With the "server" provider. */
+  server: number | null;
   model: string;
   contextTokens: number;
   /** null uses the default limit. */
   answerTokens: number | null;
 }
 
-export const providers: { id: Provider; label: string; host: string }[] = [
-  { id: "openai", label: "OpenAI", host: "api.openai.com" },
-  { id: "anthropic", label: "Claude (Anthropic)", host: "api.anthropic.com" },
+export const providers: { id: Hosted; label: string; url: string }[] = [
+  { id: "openai", label: "OpenAI", url: "https://api.openai.com/v1" },
+  { id: "anthropic", label: "Claude (Anthropic)", url: "https://api.anthropic.com/v1" },
+  { id: "openrouter", label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
 ];
+
+/** Where an API's base URL sends the transcript; null for a URL that isn't one. */
+export function destination(url: string): { host: string; local: boolean; encrypted: boolean } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.hostname === "") return null;
+  const name = parsed.hostname.toLowerCase();
+  const local =
+    name === "localhost" ||
+    name.endsWith(".localhost") ||
+    name === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(name);
+  return { host: parsed.host, local, encrypted: parsed.protocol === "https:" };
+}
 
 export const loadSettings = () => invoke<SettingsView>("settings");
 export const saveSettings = (changes: Changes) => invoke<void>("save_settings", { changes });
 export const chooseMeetingsFolder = () => invoke<string | null>("choose_meetings_folder");
-export const summaryModels = (provider: Provider, key: string | null) =>
-  invoke<ModelView[]>("summary_models", { provider, key });
+export const summaryModels = (target: Target, key: string | null) =>
+  invoke<ModelList>("summary_models", { target, key });
 export const useSummaryModel = (choice: ModelChoice) => invoke<void>("use_summary_model", { choice });
+export const renameServer = (id: number, label: string) => invoke<void>("rename_server", { id, label });
+export const removeServer = (id: number) => invoke<void>("remove_server", { id });
 export const editSummaryPrompt = () => invoke<void>("edit_summary_prompt");
 /** false when the user chose not to delete what the new setting applies to now. */
 export const setCleanup = (afterDays: number | null, del: Delete) =>

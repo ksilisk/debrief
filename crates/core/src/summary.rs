@@ -99,9 +99,9 @@ pub fn check_fits(
     transcript: &str,
 ) -> Result<(), TooLong> {
     let needed = estimate_tokens(prompt) + estimate_tokens(transcript);
-    let available = summarizer
-        .context_tokens()
-        .saturating_sub(summarizer.answer_tokens());
+    // The answer limit is often the default 32k, which would leave nothing of a small context.
+    let context = summarizer.context_tokens();
+    let available = context.saturating_sub(summarizer.answer_tokens().min(context / 4));
     if needed > available {
         Err(TooLong { needed, available })
     } else {
@@ -239,6 +239,22 @@ mod tests {
             Err(TooLong {
                 needed: 1_010,
                 available: 1_000
+            })
+        );
+    }
+
+    #[test]
+    fn a_small_context_keeps_a_quarter_for_the_answer() {
+        let summarizer = Fixed {
+            prompt: String::new(),
+            context: 200,
+        };
+        assert_eq!(check_fits(&summarizer, "", &"a".repeat(450)), Ok(()));
+        assert_eq!(
+            check_fits(&summarizer, "", &"a".repeat(453)),
+            Err(TooLong {
+                needed: 151,
+                available: 150
             })
         );
     }

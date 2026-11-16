@@ -81,6 +81,8 @@ pub fn run() {
             commands::choose_meetings_folder,
             commands::summary_models,
             commands::use_summary_model,
+            commands::rename_server,
+            commands::remove_server,
             commands::edit_summary_prompt,
             commands::permissions,
             commands::request_permission,

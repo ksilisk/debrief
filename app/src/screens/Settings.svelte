@@ -6,9 +6,12 @@
   import {
     age,
     chooseMeetingsFolder,
+    destination,
     editSummaryPrompt,
     loadSettings,
     providers,
+    removeServer,
+    renameServer,
     saveSettings,
     setCleanup,
     summaryModels,
@@ -16,6 +19,7 @@
     useSummaryModel,
     type Changes,
     type Delete,
+    type Hosted,
     type ModelView,
     type Provider,
     type SettingsView,
@@ -40,7 +44,7 @@
     speechModels,
   }: { onPermissions: () => void; update: UpdateStatus | null; speechModels: SpeechModels | null } = $props();
 
-  const CONTEXT_CHOICES = [8_000, 32_000, 128_000];
+  const CONTEXT_CHOICES = [8_000, 16_000, 32_000, 64_000, 128_000];
   const CLEANUP_DAYS = [30, 90, 365];
 
   let view = $state<SettingsView | null>(null);
@@ -73,7 +77,10 @@
 
   /** "5", "10" or "off". */
   let video = $state("5");
-  let provider = $state<Provider | "">("");
+  /** A hosted provider's id, "server:<id>", "new" for a server not saved yet, or "". */
+  let choice = $state("");
+  let serverUrl = $state("");
+  let serverLabel = $state("");
   let keyInput = $state("");
   /** null until Test connection lists them. */
   let models = $state<ModelView[] | null>(null);
@@ -88,12 +95,28 @@
   let cleaning = $state(false);
 
   const saved = $derived(view?.summary ?? null);
-  const host = $derived(providers.find((p) => p.id === provider)?.host ?? null);
-  const savedKey = $derived(provider !== "" && saved ? saved.keys[provider] : null);
+  const hosted = $derived(providers.find((p) => p.id === choice) ?? null);
+  const provider = $derived<Provider | null>(
+    hosted ? hosted.id : choice === "new" || choice.startsWith("server:") ? "server" : null,
+  );
+  const serverId = $derived(choice.startsWith("server:") ? Number(choice.slice("server:".length)) : null);
+  const savedServer = $derived(saved?.servers.find((s) => s.id === serverId) ?? null);
+  const where = $derived(hosted ? destination(hosted.url) : provider === "server" ? destination(serverUrl) : null);
+  /** A server's saved key only goes to the address it was saved for. */
+  const savedKey = $derived(
+    hosted
+      ? (saved?.keys[hosted.id] ?? null)
+      : savedServer && savedServer.url === serverUrl.trim().replace(/\/+$/, "")
+        ? savedServer.key
+        : null,
+  );
+  const isSaved = $derived(
+    provider !== null && saved?.provider === provider && (provider !== "server" || saved.server === serverId),
+  );
   /** The listed models, plus the saved one, which may no longer be listed. */
   const modelOptions = $derived.by(() => {
     const ids = models?.map((m) => m.id) ?? [];
-    if (saved?.provider === provider && saved.model !== "" && !ids.includes(saved.model)) ids.unshift(saved.model);
+    if (isSaved && saved && saved.model !== "" && !ids.includes(saved.model)) ids.unshift(saved.model);
     return ids;
   });
   const contextOptions = $derived([...new Set([...CONTEXT_CHOICES, contextTokens])].sort((a, b) => a - b));
@@ -101,9 +124,14 @@
   const cleanupOptions = $derived(
     [...new Set([...CLEANUP_DAYS, view?.cleanup.afterDays ?? CLEANUP_DAYS[0]])].sort((a, b) => a - b),
   );
-  const summaryStatus = $derived(
-    saved?.provider ? `${providerLabel(saved.provider)} · ${saved.model}` : "Not set up yet",
-  );
+  const summaryStatus = $derived.by(() => {
+    if (!saved?.provider) return "Not set up yet";
+    const name =
+      saved.provider === "server"
+        ? (saved.servers.find((s) => s.id === saved.server)?.name ?? "Server")
+        : providerLabel(saved.provider);
+    return `${name} · ${saved.model}`;
+  });
 
   onMount(() => {
     void load();
@@ -122,8 +150,8 @@
       const loaded = await loadSettings();
       view = loaded;
       video = loaded.video ? String(loaded.fps) : "off";
-      provider = loaded.summary.provider ?? "";
-      model = loaded.summary.model;
+      choice = savedChoice(loaded);
+      showChoice();
       contextTokens = loaded.summary.contextTokens;
       showCleanup(loaded);
     } catch (e) {
@@ -164,8 +192,14 @@
     }
   }
 
-  function providerLabel(id: Provider): string {
+  function providerLabel(id: Hosted): string {
     return providers.find((p) => p.id === id)?.label ?? id;
+  }
+
+  function savedChoice(loaded: SettingsView): string {
+    const summary = loaded.summary;
+    if (summary.provider === "server") return summary.server === null ? "" : `server:${summary.server}`;
+    return summary.provider ?? "";
   }
 
   async function save(changes: Changes, onError: (message: string | null) => void) {
@@ -195,33 +229,48 @@
     void save(on ? { video: on, fps: Number(video) } : { video: on }, (e) => (recordingError = e));
   }
 
-  function changeProvider() {
+  /** Fills the rows for the chosen provider or server. */
+  function showChoice() {
     models = null;
     connected = null;
-    summaryError = null;
     keyInput = "";
-    model = saved?.provider === provider ? (saved?.model ?? "") : "";
+    serverUrl = savedServer?.url ?? "";
+    serverLabel = savedServer?.label ?? "";
+    model = isSaved ? (saved?.model ?? "") : "";
+  }
+
+  function changeChoice() {
+    summaryError = null;
+    showChoice();
+  }
+
+  function changeUrl() {
+    models = null;
+    connected = null;
   }
 
   async function testConnection() {
-    if (provider === "") return;
-    const chosen = provider;
+    if (provider === null) return;
+    const chosen = choice;
     const key = keyInput.trim();
+    const server = provider === "server" ? { id: serverId, label: serverLabel, url: serverUrl } : null;
     testing = true;
     connected = null;
     summaryError = null;
     try {
-      const list = await summaryModels(chosen, key === "" ? null : key);
-      if (provider !== chosen) return;
-      models = list;
-      connected = `Connected · ${list.length} ${list.length === 1 ? "model" : "models"}`;
-      if (key !== "") {
-        keyInput = "";
-        view = await loadSettings();
+      const list = await summaryModels({ provider, server }, key === "" ? null : key);
+      if (choice !== chosen) return;
+      models = list.models;
+      connected = `Connected · ${list.models.length} ${list.models.length === 1 ? "model" : "models"}`;
+      keyInput = "";
+      if (key !== "" || list.server !== null) view = await loadSettings();
+      if (list.server !== null) {
+        choice = `server:${list.server}`;
+        serverUrl = savedServer?.url ?? serverUrl;
       }
-      const suggested = list.find((m) => m.suggested);
-      if (model === "" && suggested) {
-        model = suggested.id;
+      const first = list.models.find((m) => m.suggested) ?? (list.models.length === 1 ? list.models[0] : null);
+      if (model === "" && first) {
+        model = first.id;
         await chooseModel();
       }
     } catch (e) {
@@ -232,13 +281,45 @@
   }
 
   async function chooseModel() {
-    if (provider === "" || model === "") return;
+    if (provider === null || model === "") return;
+    if (provider === "server" && serverId === null) return;
     const info = models?.find((m) => m.id === model);
     if (info?.contextTokens) contextTokens = info.contextTokens;
     try {
-      await useSummaryModel({ provider, model, contextTokens, answerTokens: info?.answerTokens ?? null });
+      await useSummaryModel({
+        provider,
+        server: provider === "server" ? serverId : null,
+        model,
+        contextTokens,
+        answerTokens: info?.answerTokens ?? null,
+      });
       view = await loadSettings();
       summaryError = null;
+    } catch (e) {
+      summaryError = String(e);
+    }
+  }
+
+  async function changeLabel() {
+    if (serverId === null) return;
+    try {
+      await renameServer(serverId, serverLabel);
+      view = await loadSettings();
+      summaryError = null;
+    } catch (e) {
+      summaryError = String(e);
+    }
+  }
+
+  async function forgetServer() {
+    if (serverId === null) return;
+    try {
+      await removeServer(serverId);
+      const loaded = await loadSettings();
+      view = loaded;
+      choice = savedChoice(loaded);
+      summaryError = null;
+      showChoice();
     } catch (e) {
       summaryError = String(e);
     }
@@ -421,31 +502,94 @@
         <span class="k"
           ><label for="provider">Provider</label><InfoTip
             label="Provider"
-            text="Who writes the summaries. Only the transcript text is sent; audio and video stay on this Mac."
+            text="Who writes the summaries. Only the transcript text is sent; audio and video stay on this Mac. An OpenAI-compatible server can run on this Mac (Ollama, LM Studio, llama.cpp) or somewhere else. OpenRouter passes the text on to the provider of the model you choose."
           /></span
         >
         <span class="v">
           <span class="select"
-            ><select id="provider" bind:value={provider} onchange={changeProvider}>
-              {#if provider === ""}
+            ><select id="provider" bind:value={choice} onchange={changeChoice}>
+              {#if choice === ""}
                 <option value="" disabled>Choose a provider</option>
               {/if}
               {#each providers as option (option.id)}
                 <option value={option.id}>{option.label}</option>
               {/each}
+              {#if saved && saved.servers.length > 0}
+                <optgroup label="Your servers">
+                  {#each saved.servers as server (server.id)}
+                    <option value={`server:${server.id}`}>{server.name}</option>
+                  {/each}
+                </optgroup>
+              {/if}
+              <option value="new">Add an OpenAI-compatible server…</option>
             </select></span
           >
-          {#if host}
-            <span class="chip warn">Remote · transcripts are sent to {host}</span>
+          {#if provider !== null}
+            {#if where === null}
+              <span class="chip warn">Enter the server's address</span>
+            {:else if where.local}
+              <span class="chip ok">Local — transcripts stay on this Mac</span>
+            {:else}
+              <span class="chip warn"
+                >Remote — transcripts are sent to {where.host}{where.encrypted ? "" : " unencrypted"}</span
+              >
+            {/if}
           {/if}
         </span>
       </div>
-      {#if provider !== ""}
+      {#if provider === "server"}
+        <div class="row">
+          <span class="k"
+            ><label for="server-url">Base URL</label><InfoTip
+              label="Base URL"
+              text="The server's API address, usually ending in /v1: for example http://localhost:11434/v1 for Ollama or http://localhost:1234/v1 for LM Studio."
+            /></span
+          >
+          <span class="v">
+            <input
+              class="text mono"
+              id="server-url"
+              type="text"
+              bind:value={serverUrl}
+              oninput={changeUrl}
+              placeholder="http://localhost:11434/v1"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </span>
+        </div>
+        <div class="row">
+          <span class="k"
+            ><label for="server-label">Name</label><InfoTip
+              label="Server name"
+              text="How the server is shown in the Provider list. Leave it empty to show its address."
+            /></span
+          >
+          <span class="v">
+            <input
+              class="text"
+              id="server-label"
+              type="text"
+              bind:value={serverLabel}
+              onchange={changeLabel}
+              placeholder={where?.host ?? "For example, Ollama"}
+              autocomplete="off"
+              spellcheck="false"
+            />
+            {#if serverId !== null}
+              <button type="button" class="btn small" onclick={forgetServer}>Remove server</button>
+            {/if}
+          </span>
+        </div>
+      {/if}
+      {#if provider !== null}
         <div class="row">
           <span class="k"
             ><label for="key">API key</label><InfoTip
               label="API key"
-              text="Saved on this Mac in a file only your user can read, never in meeting files. Test connection checks it."
+              text={provider === "server"
+                ? "Saved on this Mac in a file only your user can read, and sent only to this server. Local servers usually don't need one."
+                : "Saved on this Mac in a file only your user can read, never in meeting files. Test connection checks it."}
             /></span
           >
           <span class="v">
@@ -454,7 +598,11 @@
               id="key"
               type="password"
               bind:value={keyInput}
-              placeholder={savedKey ? `Saved: ${savedKey}` : "Paste an API key"}
+              placeholder={savedKey
+                ? `Saved: ${savedKey}`
+                : provider === "server"
+                  ? "Optional, only if the server needs one"
+                  : "Paste an API key"}
               autocomplete="off"
               spellcheck="false"
             />
@@ -464,7 +612,9 @@
           <span class="k"
             ><label for="model">Model</label><InfoTip
               label="Summary model"
-              text="The model that writes summaries. Test connection lists the models your key can use."
+              text={provider === "server"
+                ? "The model that writes summaries. Test connection lists the models the server offers."
+                : "The model that writes summaries. Test connection lists the models your key can use."}
             /></span
           >
           <span class="v">
@@ -490,7 +640,7 @@
           <span class="k"
             ><label for="context">Model context</label><InfoTip
               label="Model context"
-              text="How much text the model reads at once. Longer transcripts are summarized in parts, then joined into one summary."
+              text="How much text the model reads at once, prompt and transcript together. A longer transcript isn't sent. For a local server, choose the context the server runs with: Ollama, for example, quietly cuts longer text."
             /></span
           >
           <span class="v">
@@ -733,6 +883,11 @@
   .chip.warn {
     color: var(--warn);
     border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+
+  .chip.ok {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 40%, transparent);
   }
 
   kbd {

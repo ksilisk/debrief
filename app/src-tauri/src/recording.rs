@@ -14,7 +14,7 @@ use debrief_capture::{
 };
 use debrief_core::meeting::{self, Language, Meeting, Settings, VIDEO_FILE, VideoFile};
 use debrief_core::recorder::{Recorder, RecorderError, Status};
-use debrief_summarize::config::{self, Provider, RecordingSettings};
+use debrief_summarize::config::{self, RecordingSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -68,7 +68,8 @@ pub struct Defaults {
     pub language: Language,
     /// The model that writes summaries; `None` until summaries are set up.
     pub summary_model: Option<String>,
-    pub summary_provider: Option<Provider>,
+    /// Where the transcript goes for a summary: the API's base URL.
+    pub summary_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,10 +171,8 @@ pub fn defaults() -> Defaults {
         .and_then(|folder| config::Settings::load(&folder))
         .unwrap_or_default();
     let recording = settings.recording;
-    let summary_model = settings
-        .summary
-        .provider
-        .map(|_| settings.summary.model.clone());
+    let endpoint = settings.summary.endpoint();
+    let summary_model = endpoint.as_ref().map(|_| settings.summary.model.clone());
     Defaults {
         record_microphone: recording.record_microphone,
         microphone: recording.microphone,
@@ -184,7 +183,7 @@ pub fn defaults() -> Defaults {
         video_source: recording.screen.map(VideoSource::Screen),
         language: recording.language,
         summary_model,
-        summary_provider: settings.summary.provider,
+        summary_url: endpoint.map(|endpoint| endpoint.url),
     }
 }
 

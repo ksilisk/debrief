@@ -1,29 +1,48 @@
-//! OpenAI's chat completions API, streamed.
+//! OpenAI's chat completions API, streamed. OpenRouter and the servers the
+//! user adds speak it too.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::{Value, json};
 
 use crate::ModelInfo;
 use crate::http::{self, Event, Events, HttpError};
 
-const BASE: &str = "https://api.openai.com/v1";
+/// A server may need no key.
+fn signed(request: RequestBuilder, key: Option<&str>) -> RequestBuilder {
+    match key {
+        Some(key) => request.bearer_auth(key),
+        None => request,
+    }
+}
 
-pub fn models(client: &Client, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
-    let response = http::send(|| client.get(format!("{BASE}/models")).bearer_auth(key))?;
+/// OpenRouter lists its models without checking the key; this checks it.
+pub fn check_key(client: &Client, base: &str, key: Option<&str>) -> Result<(), HttpError> {
+    http::send(|| signed(client.get(format!("{base}/key")), key)).map(drop)
+}
+
+/// The context and answer limits come from OpenRouter (`context_length`,
+/// `top_provider`) and vLLM (`max_model_len`); others don't list them.
+pub fn models(client: &Client, base: &str, key: Option<&str>) -> Result<Vec<ModelInfo>, HttpError> {
+    let response = http::send(|| signed(client.get(format!("{base}/models")), key))?;
     let body: Value = serde_json::from_str(&response.text().map_err(HttpError::Network)?)
         .map_err(|error| HttpError::Answer(format!("unexpected model list: {error}")))?;
+    let tokens = |value: &Value| value.as_u64().map(|n| n as usize).filter(|&n| n > 0);
     let mut models: Vec<ModelInfo> = body["data"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|model| model["id"].as_str())
-        .map(|id| ModelInfo {
-            id: id.to_string(),
-            context_tokens: None,
-            answer_tokens: None,
+        .filter_map(|model| {
+            Some(ModelInfo {
+                id: model["id"].as_str()?.to_string(),
+                context_tokens: tokens(&model["context_length"])
+                    .or_else(|| tokens(&model["max_model_len"])),
+                answer_tokens: model
+                    .pointer("/top_provider/max_completion_tokens")
+                    .and_then(tokens),
+            })
         })
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -31,9 +50,11 @@ pub fn models(client: &Client, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
 }
 
 /// `Ok(None)` when cancelled.
+#[allow(clippy::too_many_arguments)]
 pub fn summarize(
     client: &Client,
-    key: &str,
+    base: &str,
+    key: Option<&str>,
     model: &str,
     prompt: &str,
     transcript: &str,
@@ -50,13 +71,19 @@ pub fn summarize(
     });
     let bytes = serde_json::to_vec(&body).map_err(|error| HttpError::Answer(error.to_string()))?;
     let response = http::send(|| {
-        client
-            .post(format!("{BASE}/chat/completions"))
-            .bearer_auth(key)
+        signed(client.post(format!("{base}/chat/completions")), key)
             .header("content-type", "application/json")
             .body(bytes.clone())
     })?;
     read_stream(Events::new(response), on_text, cancelled)
+}
+
+/// Some local models write their reasoning first, in `<think>…</think>`.
+fn without_thinking(text: &str) -> &str {
+    text.trim_start()
+        .strip_prefix("<think>")
+        .and_then(|rest| rest.split_once("</think>"))
+        .map_or(text, |(_, answer)| answer.trim_start())
 }
 
 fn read_stream(
@@ -99,12 +126,13 @@ fn read_stream(
             _ => {}
         }
     }
+    let text = without_thinking(&text);
     if text.trim().is_empty() {
         return Err(HttpError::Answer(
             "the model returned an empty summary".into(),
         ));
     }
-    Ok(Some(text))
+    Ok(Some(text.to_string()))
 }
 
 #[cfg(test)]
@@ -137,6 +165,22 @@ mod tests {
             read(stream).expect("read"),
             Some("## Итог\nРелиз в понедельник.".into())
         );
+    }
+
+    #[test]
+    fn leaves_out_the_thinking() {
+        let stream = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"<think>\\nThe user wants\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" a summary.</think>\\n\\n## Summary\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let text = read_stream(
+            Events::new(stream.as_bytes()),
+            &mut |_| {},
+            &AtomicBool::new(false),
+        );
+        assert_eq!(text.expect("read"), Some("## Summary".into()));
+        assert_eq!(without_thinking("No <think> here"), "No <think> here");
     }
 
     #[test]

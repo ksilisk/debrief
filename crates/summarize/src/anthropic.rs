@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use crate::ModelInfo;
 use crate::http::{self, Event, Events, HttpError};
 
-const BASE: &str = "https://api.anthropic.com/v1";
 const VERSION: &str = "2026-10-21";
 
 fn signed(request: RequestBuilder, key: &str) -> RequestBuilder {
@@ -19,11 +18,11 @@ fn signed(request: RequestBuilder, key: &str) -> RequestBuilder {
 }
 
 /// Newest first, with each model's context window and answer limit.
-pub fn models(client: &Client, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
+pub fn models(client: &Client, base: &str, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
     let mut models = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let mut url = format!("{BASE}/models?limit=1000");
+        let mut url = format!("{base}/models?limit=1000");
         if let Some(id) = &after {
             url.push_str(&format!("&after_id={id}"));
         }
@@ -51,6 +50,7 @@ pub fn models(client: &Client, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
 #[allow(clippy::too_many_arguments)]
 pub fn summarize(
     client: &Client,
+    base: &str,
     key: &str,
     model: &str,
     answer_tokens: usize,
@@ -68,7 +68,7 @@ pub fn summarize(
     });
     let bytes = serde_json::to_vec(&body).map_err(|error| HttpError::Answer(error.to_string()))?;
     let response = http::send(|| {
-        signed(client.post(format!("{BASE}/messages")), key)
+        signed(client.post(format!("{base}/messages")), key)
             .header("content-type", "application/json")
             .body(bytes.clone())
     })?;

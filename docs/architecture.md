@@ -17,8 +17,8 @@ Status: agreed plan, November 2026.
 | Resampling | `rubato` → 16 kHz mono for Whisper | |
 | Speech to text | `whisper-rs` 0.16 (whisper.cpp 1.8.3, Metal); large-v3-turbo by default, or its 5-bit version or large-v3; Silero VAD 5.1.2 (whisper.cpp's, built into the app) | One pass per track over its speech only (chosen in M0.3: on silence Whisper invents lines), each speech segment at the same level and 128 tokens of carried text (chosen on an in-person meeting recorded by one microphone). Called through whisper.cpp's C API (`raw-api`), because whisper-rs has no wrapper for the speech detector. No names-and-terms prompt: it helped spelling a little but put names into unclear speech (M0.3). Parakeet (`transcribe-rs`) is not tested yet |
 | Model files | `reqwest` (blocking, native TLS) + `sha2` | Downloaded from Hugging Face with one click (New recording, Meeting or Settings) or `debrief model download`, into `~/Library/Application Support/io.github.ksilisk.debrief/models`. A stopped download continues from its `.part` file (HTTP range); the result is checked by size and SHA-256. The download first checks free space as Finder counts it (`volumeAvailableCapacityForImportantUsage`) |
-| Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`); other providers later |
-| API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files |
+| Summaries | `reqwest` + serde, streaming | OpenAI chat completions and Anthropic's Messages API (`anthropic-version: 2026-10-21`). OpenRouter and the user's OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, vLLM or remote ones) use the chat completions client with their own base URL; a server's key is optional. Requests carry only the model, the messages and `stream`: no `max_tokens` (vLLM refuses one larger than what is left of its context) and no temperature. A leading `<think>…</think>` block from local reasoning models is dropped |
+| API keys | A file in the app's folder, mode 600 | `keys.json`, readable only by the owner; never in meeting files. A server's key is kept under its id and dropped when its address changes, so it never goes to another address |
 | Tauri plugins | global-shortcut, notification, dialog, opener, single-instance, log, clipboard-manager | Added with the features that need them; tray icon is built into Tauri |
 | Signing | A self-signed code-signing certificate, hardened runtime, `Entitlements.plist` | macOS keeps permissions across builds signed with the same certificate; see “Building and signing” |
 | macOS permissions | AVFoundation, CoreGraphics, and the private TCC framework loaded at run time | Microphone, Screen & System Audio Recording, System Audio Recording (the process tap, which has no public check) and the meetings folder. The Permissions screen opens at launch when one is missing; screen recording needs Debrief to quit and reopen after it is turned on. A recording of system audio only, without video, needs neither the microphone nor screen recording. The app's Info.plist needs `NSAudioCaptureUsageDescription` for the process tap |
@@ -36,7 +36,7 @@ debrief/
 │   ├── core/           meeting model, pipeline, merge, export, summaries
 │   ├── capture/        capture interface + macOS module
 │   ├── transcribe/     Whisper and its model files
-│   ├── summarize/      OpenAI and Anthropic clients, settings and the API key file
+│   ├── summarize/      OpenAI-style and Anthropic clients, settings and the API key file
 │   └── cli/            the `debrief` command
 ├── app/
 │   ├── src-tauri/      Tauri shell: window, menu bar icon, hotkey, settings, permissions
@@ -108,12 +108,14 @@ Everything goes to the Trash, through NSFileManager rather than Finder (which wo
 
 The app's own files live in `~/Library/Application Support/io.github.ksilisk.debrief/`, never in Documents (which macOS may sync to iCloud):
 
-- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider, model, model context and answer limit, and the storage cleanup (what to delete and after how many days; never by default).
+- `settings.json`: the meetings folder (left out for `~/Documents/Debrief`), the model for Whisper, the last choices on the New recording screen (video and frame rate among them), the summary provider (or the chosen server), model, model context and answer limit, the OpenAI-compatible servers the user added (an id, an optional name and the base URL), and the storage cleanup (what to delete and after how many days; never by default).
 - `summary-prompt.txt`: the default instructions for summaries, plain text anyone can edit. It starts with a default that asks for a summary, decisions, action items and open questions in the meeting's language. A meeting with its own `summary-prompt.txt` uses that one instead.
-- `keys.json`: API keys by provider, created with mode 600 so only the owner can read it.
+- `keys.json`: API keys by provider, and `server-<id>` for a server's key, created with mode 600 so only the owner can read it.
 - `models/`: the downloaded Whisper models; `settings.json` names the one in use (left out for the default). When a download finishes and the model in use isn't downloaded, Debrief switches to the new one. Meetings that couldn't be transcribed for want of a model are processed when a download finishes (only those from the running session; older ones have Process now).
 
-`debrief config summaries` asks for the provider and the key (hidden input), checks the key by listing the provider's models, and saves the choice. The app's Settings screen writes the same files: a key is saved only after Test connection lists the models with it, and the provider and model only once a model is chosen. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs.
+`debrief config summaries` asks for the provider (or a server: a saved one or the address of a new one) and the key (hidden input), checks them by listing the models, and saves the choice. OpenRouter lists its models without checking the key, so its key is checked first with `GET /key`. The app's Settings screen writes the same files: a key is saved only after Test connection lists the models with it, a new server only once it answers, and the provider and model only once a model is chosen. Settings and the Meeting tab say whether the transcript stays on this Mac (a server at `localhost`, `*.localhost`, `127.x.x.x` or `[::1]`) or goes to another host, and Settings warns when it would go to a remote host without encryption.
+
+Before sending, the app checks that the prompt and transcript fit the model context, keeping room for the answer: the answer limit, but at most a quarter of the context, so a small local context isn't used up by the default 32k answer limit. A transcript that doesn't fit isn't sent; summarizing it in parts is not built. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs.
 
 ## Building and signing
 
@@ -141,5 +143,5 @@ An update downloaded by the app isn't quarantined, so only the first install fro
 
 - ScreenCaptureKit details: choosing the microphone, audio-only mode (the stream still needs a display; it gets a tiny one that is ignored). Covered by M0.2. M0.2 also showed that the app filter misses Chrome's helper processes, so one-app audio uses a Core Audio process tap. All-app audio moved to a tap too (M2.2), after ScreenCaptureKit's system audio turned to silence mid-recording when the volume keys were pressed.
 - Quality of mixed Russian and English transcription. M0.3 chose the defaults on a real Russian meeting (large-v3-turbo, speech only, fixed language); a meeting that mixes both languages is still to be checked.
-- Local servers often run with a small context and cut longer input. The app doesn't recommend a local model; M1.5 checks the OpenAI-compatible path against Ollama or LM Studio.
+- Local servers often run with a small context and cut longer input without an error (Ollama does, through its OpenAI-compatible API, whatever the request says). The app can't see a server's real context, so Model context is the user's to set. The app doesn't recommend a local model. The OpenAI-compatible path was checked against a stand-in server (debrief-33); a check against Ollama or LM Studio is still to be done.
 - The `screencapturekit` crate releases major versions often; pin it exactly.

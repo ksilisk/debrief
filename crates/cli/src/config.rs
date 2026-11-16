@@ -15,7 +15,7 @@ pub struct Args {
 
 #[derive(clap::Subcommand)]
 enum Action {
-    /// Set up summaries: the provider, your API key and the model.
+    /// Set up summaries: the provider or an OpenAI-compatible server, the API key and the model.
     Summaries,
 }
 
@@ -34,19 +34,35 @@ fn show() -> anyhow::Result<()> {
     let settings = all.summary;
     let keys = Keys::load(&folder)?;
     config::prompt(&folder)?;
-    match settings.provider {
+    match settings.endpoint() {
         None => println!("Summaries: not set up. Run `debrief config summaries`."),
-        Some(provider) => {
+        Some(endpoint) => {
             println!("Summaries");
-            println!("  provider        {}", provider.name());
+            match endpoint.provider {
+                Provider::Server => {
+                    println!("  server          {} ({})", endpoint.name, endpoint.url)
+                }
+                provider => println!("  provider        {}", provider.name()),
+            }
             println!("  model           {}", settings.model);
             println!("  model context   {}", tokens(settings.context_tokens));
+            let none = if endpoint.needs_key() {
+                "not saved"
+            } else {
+                "none"
+            };
             println!(
                 "  API key         {}",
-                keys.get(provider)
+                keys.get(&endpoint.key_name)
                     .map(masked)
-                    .unwrap_or_else(|| "not saved".into())
+                    .unwrap_or_else(|| none.into())
             );
+        }
+    }
+    if !settings.servers.is_empty() {
+        println!("Servers");
+        for server in &settings.servers {
+            println!("  {:>3}  {}  {}", server.id, server.name(), server.url);
         }
     }
     println!("Files");
@@ -54,6 +70,53 @@ fn show() -> anyhow::Result<()> {
     println!("  prompt    {}", folder.join(PROMPT_FILE).display());
     println!("  API keys  {}", folder.join(KEYS_FILE).display());
     Ok(())
+}
+
+/// A server from the list, or a new one; `None` for the id of a new one.
+struct ServerChoice {
+    id: Option<u32>,
+    label: String,
+    url: String,
+}
+
+fn ask_server(summary: &SummarySettings) -> anyhow::Result<ServerChoice> {
+    for server in &summary.servers {
+        println!("  {:>3}  {}  {}", server.id, server.name(), server.url);
+    }
+    let current = summary
+        .server
+        .filter(|_| summary.provider == Some(Provider::Server))
+        .map(|id| id.to_string());
+    let question = if summary.servers.is_empty() {
+        "Server address, such as http://localhost:11434/v1"
+    } else {
+        "Server (number, or the address of a new one)"
+    };
+    loop {
+        let answer = ask(question, current.as_deref())?;
+        if let Some(server) = answer
+            .parse::<u32>()
+            .ok()
+            .and_then(|id| summary.find_server(id))
+        {
+            return Ok(ServerChoice {
+                id: Some(server.id),
+                label: server.label.clone(),
+                url: server.url.clone(),
+            });
+        }
+        match config::server_url(&answer) {
+            Ok(url) => {
+                let label = ask("Name (Enter shows the address)", None)?;
+                return Ok(ServerChoice {
+                    id: None,
+                    label,
+                    url,
+                });
+            }
+            Err(error) => println!("{error}"),
+        }
+    }
 }
 
 fn set_up_summaries() -> anyhow::Result<()> {
@@ -64,7 +127,7 @@ fn set_up_summaries() -> anyhow::Result<()> {
 
     let provider = loop {
         let answer = ask(
-            "Provider (openai or anthropic)",
+            "Provider (openai, anthropic, openrouter or server)",
             current.provider.map(Provider::name),
         )?;
         match answer.parse::<Provider>() {
@@ -72,29 +135,56 @@ fn set_up_summaries() -> anyhow::Result<()> {
             Err(error) => println!("{error}"),
         }
     };
+    let server = (provider == Provider::Server)
+        .then(|| ask_server(&current))
+        .transpose()?;
+    let url = match (&server, provider.url()) {
+        (Some(server), _) => server.url.clone(),
+        (None, Some(url)) => url.to_string(),
+        (None, None) => bail!("no address for {}", provider.name()),
+    };
 
-    let saved = keys.get(provider).map(str::to_string);
-    let question = match &saved {
-        Some(key) => format!(
-            "{} API key (Enter keeps {}): ",
-            provider.name(),
-            masked(key)
-        ),
-        None => format!("{} API key (the input is hidden): ", provider.name()),
+    // A server's saved key goes only to the address it was saved for.
+    let saved = match &server {
+        Some(ServerChoice { id: Some(id), .. }) => keys.get(&config::server_key_name(*id)),
+        Some(_) => None,
+        None => keys.get(provider.name()),
+    }
+    .map(str::to_string);
+    let question = match (&saved, &server) {
+        (Some(key), _) => format!("API key (Enter keeps {}): ", masked(key)),
+        (None, Some(_)) => "API key, if the server needs one (the input is hidden): ".to_string(),
+        (None, None) => format!("{} API key (the input is hidden): ", provider.name()),
     };
     let typed = rpassword::prompt_password(question).context("could not read the key")?;
     let key = match typed.trim() {
-        "" => saved.context("an API key is needed")?,
-        typed => typed.to_string(),
+        "" if server.is_some() => saved,
+        "" => Some(saved.context("an API key is needed")?),
+        typed => Some(typed.to_string()),
     };
 
-    println!("Checking the key");
-    let models = match list_models(provider, &key) {
+    println!("Checking the connection");
+    let models = match list_models(provider, &url, key.as_deref()) {
         Ok(models) => models,
-        Err(error) => bail!("the key didn't work: {error}"),
+        Err(error) => bail!("the connection didn't work: {error}"),
     };
-    keys.set(provider, key);
-    keys.save(&folder)?;
+    let key_name = match server {
+        Some(server) => {
+            let id = settings
+                .summary
+                .put_server(server.id, &server.label, &server.url);
+            settings.summary.server = Some(id);
+            config::server_key_name(id)
+        }
+        None => {
+            settings.summary.server = None;
+            provider.name().to_string()
+        }
+    };
+    if let Some(key) = key {
+        keys.set(&key_name, key);
+        keys.save(&folder)?;
+    }
 
     let models = chat_models(provider, models);
     for (number, model) in models.iter().enumerate() {
@@ -103,14 +193,17 @@ fn set_up_summaries() -> anyhow::Result<()> {
             None => println!("  {:>3}  {}", number + 1, model.id),
         }
     }
-    let default = match (current.provider, provider) {
-        (Some(previous), now) if previous == now && !current.model.is_empty() => {
-            Some(current.model.clone())
-        }
-        (_, now) if models.iter().any(|m| m.id == now.suggested_model()) => {
-            Some(now.suggested_model().to_string())
-        }
-        _ => None,
+    let same = current.provider == Some(provider) && current.server == settings.summary.server;
+    let suggested = provider
+        .suggested_model()
+        .filter(|id| models.iter().any(|m| m.id == *id))
+        .map(str::to_string);
+    let default = if same && !current.model.is_empty() {
+        Some(current.model.clone())
+    } else if models.len() == 1 {
+        Some(models[0].id.clone())
+    } else {
+        suggested
     };
     let model = loop {
         let answer = ask("Model (number or name)", default.as_deref())?;
@@ -127,7 +220,7 @@ fn set_up_summaries() -> anyhow::Result<()> {
     let context_tokens = match info.and_then(|m| m.context_tokens) {
         Some(context) => context,
         None => {
-            let default = if current.provider == Some(provider) {
+            let default = if same {
                 current.context_tokens
             } else {
                 DEFAULT_CONTEXT_TOKENS
@@ -143,19 +236,21 @@ fn set_up_summaries() -> anyhow::Result<()> {
     };
     let answer_tokens = info.map_or(DEFAULT_ANSWER_TOKENS, |m| m.answer_limit());
 
-    settings.summary = SummarySettings {
-        provider: Some(provider),
-        model: model.clone(),
-        context_tokens,
-        answer_tokens,
-    };
+    let summary = &mut settings.summary;
+    summary.provider = Some(provider);
+    summary.model = model.clone();
+    summary.context_tokens = context_tokens;
+    summary.answer_tokens = answer_tokens;
+    let name = summary
+        .endpoint()
+        .map_or_else(|| provider.name().to_string(), |endpoint| endpoint.name);
     settings.save(&folder)?;
     config::prompt(&folder)?;
 
-    println!("Saved: summaries use {} {model}", provider.name());
+    println!("Saved: summaries use {name} {model}");
     println!("  settings  {}", folder.join(SETTINGS_FILE).display());
     println!(
-        "  API key   {} (only you can read it)",
+        "  API keys  {} (only you can read it)",
         folder.join(KEYS_FILE).display()
     );
     println!(

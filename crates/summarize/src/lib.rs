@@ -1,5 +1,5 @@
-//! Summaries through OpenAI or Anthropic, with the settings and the API key
-//! kept in the app's folder.
+//! Summaries through OpenAI, Anthropic, OpenRouter or an OpenAI-compatible
+//! server, with the settings and the API keys kept in the app's folder.
 
 mod anthropic;
 pub mod config;
@@ -11,13 +11,13 @@ use std::sync::atomic::AtomicBool;
 use debrief_core::summary::{SummarizeError, Summarizer};
 use reqwest::blocking::Client;
 
-use config::{ConfigError, Keys, Provider, Settings};
+use config::{ConfigError, Endpoint, Keys, Provider, Settings};
 pub use http::HttpError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
     pub id: String,
-    /// Known for Anthropic models; OpenAI doesn't list it.
+    /// Listed by Anthropic, OpenRouter and some servers; not by OpenAI.
     pub context_tokens: Option<usize>,
     pub answer_tokens: Option<usize>,
 }
@@ -48,7 +48,7 @@ const NOT_CHAT: [&str; 10] = [
 
 /// The models that can write a summary. Everything, if the filter leaves nothing.
 pub fn chat_models(provider: Provider, models: Vec<ModelInfo>) -> Vec<ModelInfo> {
-    if provider == Provider::Anthropic {
+    if provider != Provider::Openai {
         return models;
     }
     let chat: Vec<ModelInfo> = models
@@ -65,12 +65,20 @@ pub fn chat_models(provider: Provider, models: Vec<ModelInfo>) -> Vec<ModelInfo>
     if chat.is_empty() { models } else { chat }
 }
 
-/// Also checks the key: a wrong key fails here.
-pub fn list_models(provider: Provider, key: &str) -> Result<Vec<ModelInfo>, HttpError> {
+/// Also checks the key: a wrong key fails here. `url` is the API's base URL.
+pub fn list_models(
+    provider: Provider,
+    url: &str,
+    key: Option<&str>,
+) -> Result<Vec<ModelInfo>, HttpError> {
     let client = http::client()?;
     match provider {
-        Provider::Openai => openai::models(&client, key),
-        Provider::Anthropic => anthropic::models(&client, key),
+        Provider::Anthropic => anthropic::models(&client, url, key.unwrap_or_default()),
+        Provider::Openrouter => {
+            openai::check_key(&client, url, key)?;
+            openai::models(&client, url, key)
+        }
+        Provider::Openai | Provider::Server => openai::models(&client, url, key),
     }
 }
 
@@ -79,7 +87,7 @@ pub enum SetupError {
     #[error(transparent)]
     Config(#[from] ConfigError),
     #[error("no {0} API key is saved")]
-    NoKey(&'static str),
+    NoKey(String),
     #[error("no summary model is chosen")]
     NoModel,
     #[error(transparent)]
@@ -89,12 +97,13 @@ pub enum SetupError {
 /// The model from the settings, with the saved key and the prompt file.
 pub struct RemoteModel {
     client: Client,
-    provider: Provider,
+    endpoint: Endpoint,
     /// The id the provider knows, such as `claude-opus-5-5`.
     model_id: String,
-    /// Provider and id, saved with the step.
+    /// Provider or server, and the id; saved with the step.
     model: String,
-    key: String,
+    /// A server may need none.
+    key: Option<String>,
     /// The default prompt, from `summary-prompt.txt` in the app's folder.
     prompt: String,
     context_tokens: usize,
@@ -106,20 +115,22 @@ impl RemoteModel {
     pub fn from_settings() -> Result<Option<Self>, SetupError> {
         let folder = config::folder()?;
         let settings = Settings::load(&folder)?.summary;
-        let Some(provider) = settings.provider else {
+        let Some(endpoint) = settings.endpoint() else {
             return Ok(None);
         };
         if settings.model.trim().is_empty() {
             return Err(SetupError::NoModel);
         }
         let key = Keys::load(&folder)?
-            .get(provider)
-            .ok_or(SetupError::NoKey(provider.name()))?
-            .to_string();
+            .get(&endpoint.key_name)
+            .map(str::to_string);
+        if key.is_none() && endpoint.needs_key() {
+            return Err(SetupError::NoKey(endpoint.name));
+        }
         Ok(Some(Self {
             client: http::client()?,
-            provider,
-            model: format!("{} {}", provider.name(), settings.model),
+            model: format!("{} {}", endpoint.name, settings.model),
+            endpoint,
             model_id: settings.model,
             key,
             prompt: config::prompt(&folder)?,
@@ -153,21 +164,24 @@ impl Summarizer for RemoteModel {
         on_text: &mut dyn FnMut(usize),
         cancelled: &AtomicBool,
     ) -> Result<String, SummarizeError> {
-        let result = match self.provider {
-            Provider::Openai => openai::summarize(
+        let key = self.key.as_deref();
+        let result = match self.endpoint.provider {
+            Provider::Anthropic => anthropic::summarize(
                 &self.client,
-                &self.key,
+                &self.endpoint.url,
+                key.unwrap_or_default(),
                 &self.model_id,
+                self.answer_tokens,
                 prompt,
                 transcript,
                 on_text,
                 cancelled,
             ),
-            Provider::Anthropic => anthropic::summarize(
+            Provider::Openai | Provider::Openrouter | Provider::Server => openai::summarize(
                 &self.client,
-                &self.key,
+                &self.endpoint.url,
+                key,
                 &self.model_id,
-                self.answer_tokens,
                 prompt,
                 transcript,
                 on_text,

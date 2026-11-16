@@ -12,7 +12,7 @@ use crate::permissions::{self, Folder, Kind, Status};
 use crate::processing::{self, Progress};
 use crate::recording::{self, Choices, Defaults, Live, SourceList};
 use crate::relaunch;
-use crate::settings::{self, Changes, ModelChoice, ModelView, View};
+use crate::settings::{self, Changes, ModelChoice, ModelList, Target, View};
 use crate::speech_models;
 use crate::storage;
 use crate::updates;
@@ -187,16 +187,23 @@ pub async fn choose_meetings_folder(app: AppHandle) -> Result<Option<String>, St
 }
 
 #[tauri::command]
-pub async fn summary_models(
-    provider: debrief_summarize::config::Provider,
-    key: Option<String>,
-) -> Result<Vec<ModelView>, String> {
-    blocking(move || settings::summary_models(provider, key)).await
+pub async fn summary_models(target: Target, key: Option<String>) -> Result<ModelList, String> {
+    blocking(move || settings::summary_models(target, key)).await
 }
 
 #[tauri::command]
 pub async fn use_summary_model(choice: ModelChoice) -> Result<(), String> {
     blocking(move || settings::use_summary_model(choice)).await
+}
+
+#[tauri::command]
+pub async fn rename_server(id: u32, label: String) -> Result<(), String> {
+    blocking(move || settings::rename_server(id, label)).await
+}
+
+#[tauri::command]
+pub async fn remove_server(id: u32) -> Result<(), String> {
+    blocking(move || settings::remove_server(id)).await
 }
 
 #[tauri::command]

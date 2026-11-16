@@ -72,6 +72,9 @@ pub fn folder() -> Result<PathBuf, ConfigError> {
 pub enum Provider {
     Openai,
     Anthropic,
+    Openrouter,
+    /// One of the OpenAI-compatible servers the user added, such as Ollama or LM Studio.
+    Server,
 }
 
 impl Provider {
@@ -79,20 +82,33 @@ impl Provider {
         match self {
             Provider::Openai => "openai",
             Provider::Anthropic => "anthropic",
+            Provider::Openrouter => "openrouter",
+            Provider::Server => "server",
+        }
+    }
+
+    /// The API's base URL; a server's is in the settings.
+    pub fn url(self) -> Option<&'static str> {
+        match self {
+            Provider::Openai => Some("https://api.openai.com/v1"),
+            Provider::Anthropic => Some("https://api.anthropic.com/v1"),
+            Provider::Openrouter => Some("https://openrouter.ai/api/v1"),
+            Provider::Server => None,
         }
     }
 
     /// Chosen first when nothing is chosen yet and the provider lists it.
-    pub fn suggested_model(self) -> &'static str {
+    pub fn suggested_model(self) -> Option<&'static str> {
         match self {
-            Provider::Openai => "gpt-5-mini",
-            Provider::Anthropic => "claude-opus-5-5",
+            Provider::Openai => Some("gpt-5-mini"),
+            Provider::Anthropic => Some("claude-opus-5-5"),
+            Provider::Openrouter | Provider::Server => None,
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("unknown provider `{0}`; use openai or anthropic")]
+#[error("unknown provider `{0}`; use openai, anthropic, openrouter or server")]
 pub struct UnknownProvider(String);
 
 impl FromStr for Provider {
@@ -102,8 +118,82 @@ impl FromStr for Provider {
         match text.trim().to_lowercase().as_str() {
             "openai" => Ok(Provider::Openai),
             "anthropic" | "claude" => Ok(Provider::Anthropic),
+            "openrouter" => Ok(Provider::Openrouter),
+            "server" => Ok(Provider::Server),
             other => Err(UnknownProvider(other.to_string())),
         }
+    }
+}
+
+/// An OpenAI-compatible server the user added.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Server {
+    pub id: u32,
+    /// The user's name for it; empty shows the host.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// The API's base URL, usually ending in `/v1`.
+    pub url: String,
+}
+
+impl Server {
+    /// The label, or the host when there is none.
+    pub fn name(&self) -> String {
+        match self.label.trim() {
+            "" => host(&self.url).unwrap_or_else(|| self.url.clone()),
+            label => label.to_string(),
+        }
+    }
+
+    /// Its key's name in `keys.json`.
+    pub fn key_name(&self) -> String {
+        server_key_name(self.id)
+    }
+}
+
+pub fn server_key_name(id: u32) -> String {
+    format!("server-{id}")
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("enter the full address, such as http://localhost:11434/v1")]
+pub struct BadUrl;
+
+/// A server's base URL as typed, checked and without the trailing slash.
+pub fn server_url(text: &str) -> Result<String, BadUrl> {
+    let text = text.trim().trim_end_matches('/');
+    let url = reqwest::Url::parse(text).map_err(|_| BadUrl)?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none_or(str::is_empty) {
+        return Err(BadUrl);
+    }
+    Ok(text.to_string())
+}
+
+/// `localhost:11434`, or just the host when the URL has no port.
+pub fn host(url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(url).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+/// Where summaries are sent: a provider's API or one of the servers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    pub provider: Provider,
+    pub url: String,
+    /// Its key's name in `keys.json`.
+    pub key_name: String,
+    /// `openai`, or the server's label or host.
+    pub name: String,
+}
+
+impl Endpoint {
+    /// A server's key is optional.
+    pub fn needs_key(&self) -> bool {
+        self.provider != Provider::Server
     }
 }
 
@@ -187,6 +277,9 @@ impl Default for RecordingSettings {
 pub struct SummarySettings {
     /// `None` until summaries are set up.
     pub provider: Option<Provider>,
+    /// Which of `servers`, with [`Provider::Server`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<u32>,
     #[serde(default)]
     pub model: String,
     /// How many tokens the model reads at once.
@@ -195,6 +288,8 @@ pub struct SummarySettings {
     /// The most the answer may take, thinking included.
     #[serde(default = "default_answer")]
     pub answer_tokens: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<Server>,
 }
 
 fn default_context() -> usize {
@@ -209,10 +304,73 @@ impl Default for SummarySettings {
     fn default() -> Self {
         Self {
             provider: None,
+            server: None,
             model: String::new(),
             context_tokens: DEFAULT_CONTEXT_TOKENS,
             answer_tokens: DEFAULT_ANSWER_TOKENS,
+            servers: Vec::new(),
         }
+    }
+}
+
+impl SummarySettings {
+    /// `None` until summaries are set up.
+    pub fn endpoint(&self) -> Option<Endpoint> {
+        match self.provider? {
+            Provider::Server => {
+                let server = self.find_server(self.server?)?;
+                Some(Endpoint {
+                    provider: Provider::Server,
+                    url: server.url.clone(),
+                    key_name: server.key_name(),
+                    name: server.name(),
+                })
+            }
+            provider => Some(Endpoint {
+                provider,
+                url: provider.url()?.to_string(),
+                key_name: provider.name().to_string(),
+                name: provider.name().to_string(),
+            }),
+        }
+    }
+
+    pub fn find_server(&self, id: u32) -> Option<&Server> {
+        self.servers.iter().find(|server| server.id == id)
+    }
+
+    /// Changes the server with `id`, or adds a new one; returns its id.
+    pub fn put_server(&mut self, id: Option<u32>, label: &str, url: &str) -> u32 {
+        let label = label.trim().to_string();
+        if let Some(server) = self.servers.iter_mut().find(|server| Some(server.id) == id) {
+            server.label = label;
+            server.url = url.to_string();
+            return server.id;
+        }
+        let id = self
+            .servers
+            .iter()
+            .map(|server| server.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.servers.push(Server {
+            id,
+            label,
+            url: url.to_string(),
+        });
+        id
+    }
+
+    /// Removes the server; summaries stop being set up if they used it.
+    pub fn remove_server(&mut self, id: u32) -> Option<Server> {
+        let index = self.servers.iter().position(|server| server.id == id)?;
+        if self.provider == Some(Provider::Server) && self.server == Some(id) {
+            self.provider = None;
+            self.server = None;
+            self.model.clear();
+        }
+        Some(self.servers.remove(index))
     }
 }
 
@@ -258,7 +416,7 @@ pub fn prompt(folder: &Path) -> Result<String, ConfigError> {
     }
 }
 
-/// API keys by provider name.
+/// API keys by provider name, or by [`Server::key_name`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Keys(BTreeMap<String, String>);
 
@@ -271,15 +429,19 @@ impl Keys {
         }
     }
 
-    pub fn get(&self, provider: Provider) -> Option<&str> {
+    pub fn get(&self, name: &str) -> Option<&str> {
         self.0
-            .get(provider.name())
+            .get(name)
             .map(String::as_str)
             .filter(|key| !key.is_empty())
     }
 
-    pub fn set(&mut self, provider: Provider, key: String) {
-        self.0.insert(provider.name().to_string(), key);
+    pub fn set(&mut self, name: &str, key: String) {
+        self.0.insert(name.to_string(), key);
+    }
+
+    pub fn remove(&mut self, name: &str) {
+        self.0.remove(name);
     }
 
     /// Readable and writable only by the owner (mode 600).
@@ -373,8 +535,12 @@ mod tests {
         let folder = temp_folder("settings");
         assert_eq!(Settings::load(&folder).expect("load"), Settings::default());
         let mut settings = Settings::default();
-        settings.summary.provider = Some(Provider::Anthropic);
-        settings.summary.model = "claude-opus-5-5".into();
+        settings.summary.provider = Some(Provider::Server);
+        settings.summary.model = "qwen3:14b".into();
+        let id = settings
+            .summary
+            .put_server(None, "Ollama", "http://localhost:11434/v1");
+        settings.summary.server = Some(id);
         settings.recording.app = Some("us.zoom.xos".into());
         settings.recording.language = Language::Auto;
         settings.transcription.model = Some("large-v3".into());
@@ -398,6 +564,7 @@ mod tests {
         .expect("write");
         let settings = Settings::load(&folder).expect("load");
         assert_eq!(settings.summary.model, "gpt-5");
+        assert_eq!(settings.summary.servers, Vec::new());
         assert_eq!(settings.recording, RecordingSettings::default());
         assert_eq!(settings.transcription, TranscriptionSettings::default());
         assert_eq!(settings.cleanup.rule(), None);
@@ -418,7 +585,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let folder = temp_folder("keys");
         let mut keys = Keys::default();
-        keys.set(Provider::Openai, "sk-test-0123456789".into());
+        keys.set("openai", "sk-test-0123456789".into());
         keys.save(&folder).expect("save");
         let mode = fs::metadata(folder.join(KEYS_FILE))
             .expect("meta")
@@ -426,8 +593,68 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         let loaded = Keys::load(&folder).expect("load");
-        assert_eq!(loaded.get(Provider::Openai), Some("sk-test-0123456789"));
-        assert_eq!(loaded.get(Provider::Anthropic), None);
+        assert_eq!(loaded.get("openai"), Some("sk-test-0123456789"));
+        assert_eq!(loaded.get("anthropic"), None);
+    }
+
+    #[test]
+    fn servers_are_added_changed_and_removed() {
+        let mut summary = SummarySettings::default();
+        let ollama = summary.put_server(None, " Ollama ", "http://localhost:11434/v1");
+        let work = summary.put_server(None, "", "https://llm.example.com:8443/v1");
+        assert_eq!((ollama, work), (1, 2));
+        assert_eq!(
+            summary.find_server(ollama).map(Server::name).as_deref(),
+            Some("Ollama")
+        );
+        assert_eq!(
+            summary.find_server(work).map(Server::name).as_deref(),
+            Some("llm.example.com:8443")
+        );
+
+        summary.provider = Some(Provider::Server);
+        summary.server = Some(work);
+        summary.model = "qwen3:14b".into();
+        let endpoint = summary.endpoint().expect("endpoint");
+        assert_eq!(endpoint.url, "https://llm.example.com:8443/v1");
+        assert_eq!(endpoint.key_name, "server-2");
+        assert!(!endpoint.needs_key());
+
+        assert_eq!(
+            summary.put_server(Some(work), "Work", "https://llm.example.com/v1"),
+            work
+        );
+        assert_eq!(summary.endpoint().expect("endpoint").name, "Work");
+
+        summary.remove_server(work).expect("removed");
+        assert_eq!(summary.provider, None);
+        assert_eq!(summary.endpoint(), None);
+        assert_eq!(summary.put_server(None, "", "http://127.0.0.1:1234/v1"), 2);
+    }
+
+    #[test]
+    fn server_urls_need_a_scheme_and_a_host() {
+        assert_eq!(
+            server_url(" http://localhost:11434/v1/ ").ok().as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+        assert!(server_url("localhost:11434/v1").is_err());
+        assert!(server_url("ftp://example.com/v1").is_err());
+        assert!(server_url("").is_err());
+        assert_eq!(
+            Provider::Openrouter.url(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(
+            SummarySettings {
+                provider: Some(Provider::Openrouter),
+                ..SummarySettings::default()
+            }
+            .endpoint()
+            .map(|endpoint| endpoint.key_name)
+            .as_deref(),
+            Some("openrouter")
+        );
     }
 
     #[test]

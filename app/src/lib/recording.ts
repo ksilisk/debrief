@@ -26,7 +26,8 @@ export interface Choices {
 export interface Defaults extends Omit<Choices, "title"> {
   /** null until summaries are set up. */
   summaryModel: string | null;
-  summaryProvider: "openai" | "anthropic" | null;
+  /** Where the transcript goes for a summary: the API's base URL. */
+  summaryUrl: string | null;
 }
 
 export interface Choice<T> {

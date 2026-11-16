@@ -5,7 +5,7 @@
   import { onMount } from "svelte";
   import { clock, recordingDefaults, showInFinder } from "../lib/recording";
   import { renderMarkdown } from "../lib/markdown";
-  import { providers } from "../lib/settings";
+  import { destination } from "../lib/settings";
   import {
     copyText,
     duration,
@@ -51,7 +51,8 @@
   let showEcho = $state(false);
   let copied = $state(false);
   let summaryModel = $state<string | null>(null);
-  let summaryHost = $state<string | null>(null);
+  /** Where the transcript goes for a summary, for the note before Write summary. */
+  let summaryWhere = $state("");
   /** The prompt editor is open, with this text. */
   let editing = $state(false);
   let promptText = $state("");
@@ -72,7 +73,12 @@
     recordingDefaults()
       .then((defaults) => {
         summaryModel = defaults.summaryModel;
-        summaryHost = providers.find((provider) => provider.id === defaults.summaryProvider)?.host ?? null;
+        const where = defaults.summaryUrl ? destination(defaults.summaryUrl) : null;
+        summaryWhere = !where
+          ? ""
+          : where.local
+            ? `The transcript text stays on this Mac: it goes to the server at ${where.host}.`
+            : `The transcript text goes to ${where.host}.`;
       })
       .catch(() => {
         // Opened in a plain browser (npm run dev) instead of the Tauri window.
@@ -373,7 +379,7 @@
                 {stepOf("summary")?.error ?? "Writing it failed."}
               {:else if summaryModel}
                 Write one when you need it, with the prompt shown above.
-                {summaryHost ? `The transcript text goes to ${summaryHost}.` : ""}
+                {summaryWhere}
               {:else}
                 Summaries are not set up yet.
               {/if}
