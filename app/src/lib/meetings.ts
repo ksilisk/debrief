@@ -21,6 +21,8 @@ export type Speaker = "me" | "them";
 export interface MeetingItem {
   folder: string;
   title: string;
+  /** The title as typed; empty when the meeting uses the date and time. */
+  ownTitle: string;
   /** RFC 3339. */
   startedAt: string;
   durationSeconds: number;
@@ -84,12 +86,19 @@ export interface Finished {
   cancelled: boolean;
 }
 
+/** A meeting got a new title and maybe a new folder. */
+export interface Renamed {
+  from: string;
+  to: string;
+}
+
 /** Events the Rust side sends. */
 export const meetingEvents = {
   changed: "meetings-changed",
   progress: "processing-progress",
   finished: "processing-finished",
   open: "open-meeting",
+  renamed: "meeting-renamed",
 } as const;
 
 export const listMeetings = () => invoke<MeetingItem[]>("meetings");
@@ -101,6 +110,10 @@ export const writeSummary = (folder: string, prompt: string | null) =>
 export const stopProcessing = (folder: string) => invoke<void>("stop_processing", { folder });
 export const processingProgress = () => invoke<Progress | null>("processing_progress");
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
+/** Renames now, or once the meeting's processing ends. Empty uses the date and time. */
+export const renameMeeting = (folder: string, title: string) => invoke<void>("rename_meeting", { folder, title });
+/** An alert, for problems the window has no room to show in place. */
+export const showProblem = (problem: string, detail: string) => invoke<void>("show_problem", { problem, detail });
 /** Asks first; false when nothing was moved. Problems show in an alert. */
 export const moveToTrash = (folder: string) => invoke<boolean>("delete_meeting", { folder });
 

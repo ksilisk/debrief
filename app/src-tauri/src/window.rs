@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 pub const MAIN: &str = "main";
 
@@ -14,6 +15,19 @@ const NAVIGATE: &str = "navigate";
 pub enum Screen {
     New,
     Settings,
+}
+
+/// Waits until the alert is closed, so it must not run on the main thread.
+pub fn alert(app: &AppHandle, problem: &str, detail: &str) {
+    let dialog = app
+        .dialog()
+        .message(detail)
+        .title(problem)
+        .kind(MessageDialogKind::Error);
+    match app.get_webview_window(MAIN) {
+        Some(main) => dialog.parent(&main).blocking_show(),
+        None => dialog.blocking_show(),
+    };
 }
 
 /// Tells the window to open a meeting. The payload is the meeting folder.

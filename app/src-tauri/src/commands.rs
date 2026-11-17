@@ -59,14 +59,14 @@ pub async fn stop_recording(app: AppHandle) -> Result<(), String> {
 /// Newest first.
 #[tauri::command]
 pub async fn meetings(app: AppHandle) -> Result<Vec<Item>, String> {
-    blocking(move || Ok(library::list(&|folder| processing::status_of(&app, folder)))).await
+    blocking(move || Ok(library::list(&|folder| processing::queued(&app, folder)))).await
 }
 
 #[tauri::command]
 pub async fn meeting(app: AppHandle, folder: String) -> Result<Details, String> {
     blocking(move || {
         let folder = library::checked_folder(&folder)?;
-        library::details(&folder, &|folder| processing::status_of(&app, folder))
+        library::details(&folder, &|folder| processing::queued(&app, folder))
     })
     .await
 }
@@ -134,6 +134,28 @@ pub async fn delete_meeting(app: AppHandle, folder: String) -> Result<bool, Stri
             &app,
             &library::checked_folder(&folder)?,
         ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_meeting(app: AppHandle, folder: String, title: String) -> Result<(), String> {
+    blocking(move || {
+        let folder = library::checked_folder(&folder)?;
+        if debrief_core::session::is_recording(&folder) {
+            return Err("Stop the recording before you rename it.".into());
+        }
+        processing::rename(&app, &folder, &title)
+    })
+    .await
+}
+
+/// For problems the window has no room to show in place.
+#[tauri::command]
+pub async fn show_problem(app: AppHandle, problem: String, detail: String) -> Result<(), String> {
+    blocking(move || {
+        crate::window::alert(&app, &problem, &detail);
+        Ok(())
     })
     .await
 }

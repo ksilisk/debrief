@@ -2,7 +2,7 @@
 //! worker thread. The steps are the same as `debrief process`; the window and
 //! the menu bar follow the progress.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -19,7 +19,7 @@ use debrief_transcribe::Whisper;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::library::{self, SHOWN_STEPS, Status};
+use crate::library::{self, Queued, SHOWN_STEPS, Status};
 use crate::phase::{self, Phase};
 use crate::{notify, recording, speech_models, tray};
 
@@ -27,6 +27,8 @@ const PROGRESS: &str = "processing-progress";
 const FINISHED: &str = "processing-finished";
 /// The meeting list changed: a meeting started, finished or moved in the queue.
 pub const MEETINGS_CHANGED: &str = "meetings-changed";
+/// A meeting got a new title and maybe a new folder.
+const RENAMED: &str = "meeting-renamed";
 
 /// The window gets at most this many progress updates per second.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
@@ -78,14 +80,52 @@ pub struct Finished {
     pub cancelled: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct Renamed {
+    from: String,
+    to: String,
+}
+
 #[derive(Default)]
 struct State {
     waiting: VecDeque<Job>,
+    /// The meeting a job works on, from the moment it leaves `waiting`.
+    running: Option<PathBuf>,
     current: Option<(PathBuf, Progress)>,
     worker: bool,
     /// Meetings that couldn't be transcribed because the model wasn't
     /// downloaded; they are processed once a download finishes.
     need_model: Vec<PathBuf>,
+    /// New titles for meetings in the queue, saved once their jobs end.
+    renames: HashMap<PathBuf, String>,
+}
+
+impl State {
+    fn has(&self, folder: &Path) -> bool {
+        self.waiting.iter().any(|job| job.folder == folder)
+            || self.running.as_deref() == Some(folder)
+    }
+
+    /// Saves a waiting new title once the meeting has left the queue.
+    fn rename_waiting(&mut self, folder: &Path) -> Option<Result<PathBuf, String>> {
+        if self.has(folder) {
+            return None;
+        }
+        let title = self.renames.remove(folder)?;
+        Some(self.rename_now(folder, &title))
+    }
+
+    /// Runs with the lock held, so no job starts on the old folder meanwhile.
+    fn rename_now(&mut self, folder: &Path, title: &str) -> Result<PathBuf, String> {
+        let renamed = debrief_core::rename::rename(folder, title)
+            .map_err(|error| capitalized(&error.to_string()))?;
+        for waiting in &mut self.need_model {
+            if waiting == folder {
+                *waiting = renamed.clone();
+            }
+        }
+        Ok(renamed)
+    }
 }
 
 /// Kept in Tauri's managed state.
@@ -131,26 +171,57 @@ pub fn stop(app: &AppHandle, folder: &Path) {
     let folder = canonical(folder);
     let mut state = lock(&queue.state);
     state.waiting.retain(|job| job.folder != folder);
-    if state
-        .current
-        .as_ref()
-        .is_some_and(|(current, _)| *current == folder)
-    {
+    if state.running.as_ref() == Some(&folder) {
         queue.cancelled.store(true, Ordering::SeqCst);
     }
+    let renamed = state.rename_waiting(&folder);
     drop(state);
+    if renamed_after_queue(app, &folder, renamed).is_some() {
+        tray::refresh_recent(app);
+    }
     emit(app, MEETINGS_CHANGED, ());
 }
 
-/// `Processing`, `Waiting` or `Summarizing` for a meeting in the queue.
-pub fn status_of(app: &AppHandle, folder: &Path) -> Option<Status> {
+/// Gives the meeting a new title now, or once its jobs end when it is in the
+/// queue: a running job saves `meeting.json` and needs its folder.
+pub fn rename(app: &AppHandle, folder: &Path, title: &str) -> Result<(), String> {
+    let folder = canonical(folder);
+    let queue = app.state::<Queue>();
+    let mut state = lock(&queue.state);
+    let renamed = if state.has(&folder) {
+        state
+            .renames
+            .insert(folder.clone(), title.trim().to_string());
+        None
+    } else {
+        Some(state.rename_now(&folder, title)?)
+    };
+    drop(state);
+    if let Some(renamed) = renamed {
+        announce(app, &folder, &renamed);
+    }
+    emit(app, MEETINGS_CHANGED, ());
+    tray::refresh_recent(app);
+    Ok(())
+}
+
+/// What the queue knows about a meeting, for the meeting list.
+pub fn queued(app: &AppHandle, folder: &Path) -> Queued {
     let folder = canonical(folder);
     let queue = app.state::<Queue>();
     let state = lock(&queue.state);
+    Queued {
+        status: status_of(&state, &folder),
+        title: state.renames.get(&folder).cloned(),
+    }
+}
+
+/// `Processing`, `Waiting` or `Summarizing` for a meeting in the queue.
+fn status_of(state: &State, folder: &Path) -> Option<Status> {
     if let Some((_, progress)) = state
         .current
         .as_ref()
-        .filter(|(current, _)| *current == folder)
+        .filter(|(current, _)| current == folder)
     {
         Some(if progress.summary_only {
             Status::Summarizing
@@ -180,12 +251,7 @@ fn enqueue(app: &AppHandle, folder: &Path, kind: Kind) {
     let queue = app.state::<Queue>();
     let folder = canonical(folder);
     let mut state = lock(&queue.state);
-    let queued = state.waiting.iter().any(|job| job.folder == folder)
-        || state
-            .current
-            .as_ref()
-            .is_some_and(|(current, _)| *current == folder);
-    if !queued {
+    if !state.has(&folder) {
         state.waiting.push_back(Job { folder, kind });
     }
     let start_worker = !state.worker;
@@ -206,7 +272,11 @@ fn work(app: &AppHandle) {
         let job = {
             let mut state = lock(&queue.state);
             match state.waiting.pop_front() {
-                Some(job) => job,
+                Some(job) => {
+                    state.running = Some(job.folder.clone());
+                    queue.cancelled.store(false, Ordering::SeqCst);
+                    job
+                }
                 None => {
                     state.worker = false;
                     state.current = None;
@@ -214,9 +284,19 @@ fn work(app: &AppHandle) {
                 }
             }
         };
-        queue.cancelled.store(false, Ordering::SeqCst);
-        let finished = run(app, &job, &mut whisper, &queue.cancelled);
-        lock(&queue.state).current = None;
+        let mut finished = run(app, &job, &mut whisper, &queue.cancelled);
+        let renamed = {
+            let mut state = lock(&queue.state);
+            state.running = None;
+            state.current = None;
+            state.rename_waiting(&job.folder)
+        };
+        if let Some(folder) = renamed_after_queue(app, &job.folder, renamed) {
+            if let Ok(meeting) = Meeting::load(&folder) {
+                finished.title = library::title(&folder, &meeting);
+            }
+            finished.folder = folder.display().to_string();
+        }
         if finished.problem.is_none() && !finished.cancelled {
             notify::meeting_ready(app, &finished.title, job.kind == Kind::Summarize);
         }
@@ -302,6 +382,36 @@ fn run(
             finished(Some(format!("No summary was written: {reason}.")), false)
         }
         Err(error) => finished(Some(capitalized(&error.to_string())), false),
+    }
+}
+
+fn announce(app: &AppHandle, from: &Path, to: &Path) {
+    emit(
+        app,
+        RENAMED,
+        Renamed {
+            from: from.display().to_string(),
+            to: to.display().to_string(),
+        },
+    );
+}
+
+/// Tells the window about a title saved after the meeting's jobs ended, and
+/// returns the meeting's folder.
+fn renamed_after_queue(
+    app: &AppHandle,
+    from: &Path,
+    renamed: Option<Result<PathBuf, String>>,
+) -> Option<PathBuf> {
+    match renamed? {
+        Ok(to) => {
+            announce(app, from, &to);
+            Some(to)
+        }
+        Err(problem) => {
+            eprintln!("Could not rename the meeting: {problem}");
+            None
+        }
     }
 }
 

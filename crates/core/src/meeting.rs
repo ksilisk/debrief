@@ -50,6 +50,13 @@ pub enum MeetingError {
         path.display()
     )]
     Newer { path: PathBuf, found: u64 },
+    #[error("could not rename {} to {}: {source}", from.display(), to.display())]
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("could not join the video parts: {0}")]
     JoinVideo(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -410,10 +417,30 @@ pub fn default_library() -> Option<PathBuf> {
 
 /// For example `2026-11-04 14-30 Product sync`.
 pub fn folder_name(started_at: &DateTime<FixedOffset>, title: &str) -> String {
-    let stamp = started_at.format("%Y-%m-%d %H-%M").to_string();
+    with_title(&started_at.format("%Y-%m-%d %H-%M").to_string(), title)
+}
+
+/// The folder's name with a new title after its date and time, or `None` when
+/// the name doesn't start with them, as after a rename in Finder.
+pub(crate) fn retitled_name(folder: &Path, title: &str) -> Option<String> {
+    const STAMP: &[u8] = b"0000-00-00 00-00";
+    let name = folder.file_name()?.to_str()?;
+    let stamp = name.get(..STAMP.len())?;
+    let shaped = stamp
+        .bytes()
+        .zip(STAMP.iter().copied())
+        .all(|(c, shape)| match shape {
+            b'0' => c.is_ascii_digit(),
+            _ => c == shape,
+        });
+    let rest = &name[stamp.len()..];
+    (shaped && (rest.is_empty() || rest.starts_with(' '))).then(|| with_title(stamp, title))
+}
+
+fn with_title(stamp: &str, title: &str) -> String {
     let title = clean_title(title);
     if title.is_empty() {
-        stamp
+        stamp.to_string()
     } else {
         format!("{stamp} {title}")
     }
@@ -427,10 +454,7 @@ pub fn create_folder(library: &Path, name: &str) -> Result<PathBuf, MeetingError
     };
     fs::create_dir_all(library).map_err(|source| write_error(library, source))?;
     for n in 1..=MAX_SAME_NAME {
-        let folder = match n {
-            1 => library.join(name),
-            n => library.join(format!("{name} ({n})")),
-        };
+        let folder = library.join(numbered(name, n));
         match fs::create_dir(&folder) {
             Ok(()) => return Ok(folder),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -441,6 +465,46 @@ pub fn create_folder(library: &Path, name: &str) -> Result<PathBuf, MeetingError
         &library.join(name),
         io::ErrorKind::AlreadyExists.into(),
     ))
+}
+
+/// Renames `folder` to `name`, or `name (2)` and so on when it is taken, next
+/// to where it is now.
+pub(crate) fn move_folder(folder: &Path, name: &str) -> Result<PathBuf, MeetingError> {
+    let parent = folder.parent().unwrap_or(Path::new(""));
+    let current = folder
+        .file_name()
+        .map(|current| current.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    for n in 1..=MAX_SAME_NAME {
+        let candidate = numbered(name, n);
+        let target = parent.join(&candidate);
+        if target == folder {
+            return Ok(target);
+        }
+        // On a case-insensitive disk a change of case finds the folder itself.
+        if candidate.to_lowercase() == current || fs::symlink_metadata(&target).is_err() {
+            return match fs::rename(folder, &target) {
+                Ok(()) => Ok(target),
+                Err(source) => Err(MeetingError::Move {
+                    from: folder.to_path_buf(),
+                    to: target,
+                    source,
+                }),
+            };
+        }
+    }
+    Err(MeetingError::Move {
+        from: folder.to_path_buf(),
+        to: parent.join(name),
+        source: io::ErrorKind::AlreadyExists.into(),
+    })
+}
+
+fn numbered(name: &str, n: u32) -> String {
+    match n {
+        1 => name.to_string(),
+        n => format!("{name} ({n})"),
+    }
 }
 
 /// Characters that macOS, Windows or Linux don't allow in names, or that Finder

@@ -1,6 +1,7 @@
 <script lang="ts">
   import InfoTip from "../lib/components/InfoTip.svelte";
   import ModelDownload from "../lib/components/ModelDownload.svelte";
+  import TitleField from "../lib/components/TitleField.svelte";
   import { chosenModel, type SpeechModels } from "../lib/models";
   import { onMount } from "svelte";
   import { clock, recordingDefaults, showInFinder } from "../lib/recording";
@@ -14,6 +15,7 @@
     meetingDetails,
     moveToTrash,
     processMeeting,
+    renameMeeting,
     stopProcessing,
     writeSummary,
     type MeetingDetails,
@@ -25,6 +27,7 @@
 
   let {
     folder,
+    opened,
     progress,
     version,
     problems = [],
@@ -32,6 +35,8 @@
     onSettings,
   }: {
     folder: string;
+    /** Goes up when another meeting opens; a rename keeps the open tab. */
+    opened: number;
     /** The live progress when this meeting is the one being processed. */
     progress: Progress | null;
     /** Goes up when meetings change, so the details load again. */
@@ -56,6 +61,7 @@
   /** The prompt editor is open, with this text. */
   let editing = $state(false);
   let promptText = $state("");
+  let renaming = $state(false);
 
   $effect(() => {
     void load(folder, version);
@@ -63,10 +69,11 @@
 
   // Each meeting opens on its summary.
   $effect(() => {
-    void folder;
+    void opened;
     tab = "summary";
     showEcho = false;
     editing = false;
+    renaming = false;
   });
 
   onMount(() => {
@@ -104,6 +111,11 @@
     } catch (e) {
       actionError = String(e);
     }
+  }
+
+  async function saveTitle(title: string) {
+    renaming = false;
+    if (details && title !== details.ownTitle) await run(() => renameMeeting(folder, title));
   }
 
   async function copySummary() {
@@ -224,8 +236,28 @@
   <p class="error" role="alert">{loadError}</p>
 {:else if details}
   <div class="m-head">
-    <div>
-      <h2>{details.title}</h2>
+    <div class="m-title">
+      {#if renaming}
+        <TitleField
+          value={details.ownTitle}
+          size="heading"
+          placeholder="Leave empty to use the date and time"
+          onSave={(title) => void saveTitle(title)}
+          onCancel={() => (renaming = false)}
+        />
+      {:else}
+        <h2>
+          <button
+            type="button"
+            class="title-btn"
+            title="Rename"
+            onclick={() => (renaming = true)}
+            disabled={details.status === "recording"}
+          >
+            {details.title}
+          </button>
+        </h2>
+      {/if}
       <p class="sub">{subtitle}</p>
     </div>
     <div class="m-actions">
@@ -469,6 +501,32 @@
     justify-content: space-between;
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+
+  .m-title {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  .title-btn {
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: left;
+    cursor: text;
+  }
+
+  .title-btn:hover:not(:disabled) {
+    background: var(--soft);
+    box-shadow: 0 0 0 4px var(--soft);
+  }
+
+  .title-btn:disabled {
+    cursor: default;
   }
 
   .m-actions {

@@ -96,7 +96,7 @@ pub fn delete_meeting(app: &AppHandle, folder: &Path) -> bool {
         .map(|meeting| library::title(folder, &meeting))
         .unwrap_or_else(|_| folder.display().to_string());
     if is_recording(folder) {
-        alert(
+        window::alert(
             app,
             &format!("“{title}” is being recorded"),
             "Stop the recording first.",
@@ -104,7 +104,7 @@ pub fn delete_meeting(app: &AppHandle, folder: &Path) -> bool {
         return false;
     }
     if is_busy(app, folder) {
-        alert(
+        window::alert(
             app,
             &format!("“{title}” is being processed"),
             "Stop processing it or take it out of the queue first.",
@@ -118,7 +118,7 @@ pub fn delete_meeting(app: &AppHandle, folder: &Path) -> bool {
         return false;
     }
     if let Err(error) = trash::move_to_trash(folder) {
-        alert(
+        window::alert(
             app,
             &format!("Could not move “{title}” to the Trash"),
             &error.to_string(),
@@ -219,20 +219,8 @@ fn confirm(app: &AppHandle, question: &str, detail: &str) -> bool {
     }
 }
 
-fn alert(app: &AppHandle, problem: &str, detail: &str) {
-    let dialog = app
-        .dialog()
-        .message(detail)
-        .title(problem)
-        .kind(MessageDialogKind::Error);
-    match app.get_webview_window(window::MAIN) {
-        Some(main) => dialog.parent(&main).blocking_show(),
-        None => dialog.blocking_show(),
-    };
-}
-
 fn is_busy(app: &AppHandle, folder: &Path) -> bool {
-    processing::status_of(app, folder).is_some()
+    processing::queued(app, folder).status.is_some()
 }
 
 fn changed(app: &AppHandle) {

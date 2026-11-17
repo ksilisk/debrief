@@ -74,6 +74,8 @@ pub fn run() {
             commands::processing_progress,
             commands::show_in_finder,
             commands::delete_meeting,
+            commands::rename_meeting,
+            commands::show_problem,
             commands::copy_text,
             commands::settings,
             commands::save_settings,

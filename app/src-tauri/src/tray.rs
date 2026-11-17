@@ -210,14 +210,15 @@ pub fn update(app: &AppHandle, phase: &Phase) -> tauri::Result<()> {
 
 /// Reloads the Recent list after a meeting was added or processed.
 pub fn refresh_recent(app: &AppHandle) {
-    let recent: Vec<Recent> = crate::library::list(&|_| None)
-        .into_iter()
-        .take(RECENT_COUNT)
-        .map(|item| Recent {
-            folder: item.folder,
-            title: item.title,
-        })
-        .collect();
+    let recent: Vec<Recent> =
+        crate::library::list(&|folder| crate::processing::queued(app, folder))
+            .into_iter()
+            .take(RECENT_COUNT)
+            .map(|item| Recent {
+                folder: item.folder,
+                title: item.title,
+            })
+            .collect();
     let shown = app.state::<Shown>();
     let mut shown = shown.0.lock().unwrap_or_else(PoisonError::into_inner);
     if shown.recent == recent {

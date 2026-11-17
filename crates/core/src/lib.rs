@@ -9,6 +9,7 @@ pub mod meeting;
 pub mod process;
 pub mod recorder;
 pub mod recording;
+pub mod rename;
 pub mod repair;
 pub mod session;
 pub mod summary;

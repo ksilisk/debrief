@@ -36,10 +36,20 @@ pub enum Status {
 pub struct Item {
     pub folder: String,
     pub title: String,
+    /// The title as typed; empty when the meeting uses the date and time.
+    pub own_title: String,
     /// RFC 3339 with the recording's own offset.
     pub started_at: String,
     pub duration_seconds: f64,
     pub status: Status,
+}
+
+/// What the processing queue knows about a meeting.
+#[derive(Debug, Default)]
+pub struct Queued {
+    pub status: Option<Status>,
+    /// A new title that waits for the meeting's processing to end.
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,7 +123,7 @@ const FILE_ORDER: [&str; 11] = [
 ];
 
 /// Newest first. `queued` tells which folders are being processed or waiting.
-pub fn list(queued: &dyn Fn(&Path) -> Option<Status>) -> Vec<Item> {
+pub fn list(queued: &dyn Fn(&Path) -> Queued) -> Vec<Item> {
     let Ok(library) = config::library() else {
         return Vec::new();
     };
@@ -126,7 +136,7 @@ pub fn list(queued: &dyn Fn(&Path) -> Option<Status>) -> Vec<Item> {
         .filter(|folder| folder.join(MEETING_FILE).is_file())
         .filter_map(|folder| {
             let meeting = Meeting::load(&folder).ok()?;
-            let item = item(&folder, &meeting, queued);
+            let item = item(&folder, &meeting, queued(&folder));
             Some((meeting, item))
         })
         .collect();
@@ -134,7 +144,7 @@ pub fn list(queued: &dyn Fn(&Path) -> Option<Status>) -> Vec<Item> {
     items.into_iter().map(|(_, item)| item).collect()
 }
 
-pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Result<Details, String> {
+pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Queued) -> Result<Details, String> {
     let meeting = Meeting::load(folder).map_err(|error| error.to_string())?;
     let transcript = Transcript::load(folder).ok();
     let mut heard: Vec<String> = Vec::new();
@@ -147,7 +157,7 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Option<Status>) -> Resul
         .as_ref()
         .is_none_or(|transcript| transcript.single_speaker().is_none());
     Ok(Details {
-        item: item(folder, &meeting, queued),
+        item: item(folder, &meeting, queued(folder)),
         video: meeting.video.as_ref().map(|video| video.source.clone()),
         language: meeting.settings.language.code().to_string(),
         heard,
@@ -202,21 +212,28 @@ pub fn title(folder: &Path, meeting: &Meeting) -> String {
     }
 }
 
-fn item(folder: &Path, meeting: &Meeting, queued: &dyn Fn(&Path) -> Option<Status>) -> Item {
+fn item(folder: &Path, meeting: &Meeting, queued: Queued) -> Item {
     Item {
         folder: folder.display().to_string(),
-        title: title(folder, meeting),
+        title: match &queued.title {
+            Some(new) if new.is_empty() => meeting::folder_name(&meeting.recording.started_at, ""),
+            Some(new) => new.clone(),
+            None => title(folder, meeting),
+        },
+        own_title: queued
+            .title
+            .unwrap_or_else(|| meeting.title.trim().to_string()),
         started_at: meeting.recording.started_at.to_rfc3339(),
         duration_seconds: meeting.recording.duration_seconds,
-        status: status(folder, meeting, queued),
+        status: status(folder, meeting, queued.status),
     }
 }
 
-fn status(folder: &Path, meeting: &Meeting, queued: &dyn Fn(&Path) -> Option<Status>) -> Status {
+fn status(folder: &Path, meeting: &Meeting, queued: Option<Status>) -> Status {
     if is_recording(folder) {
         return Status::Recording;
     }
-    if let Some(status) = queued(folder) {
+    if let Some(status) = queued {
         return status;
     }
     if meeting.recording.stopped_at.is_none() {
@@ -308,7 +325,7 @@ mod tests {
     }
 
     fn status_of(meeting: &Meeting) -> Status {
-        status(Path::new("/nonexistent/meeting"), meeting, &|_| None)
+        status(Path::new("/nonexistent/meeting"), meeting, None)
     }
 
     #[test]
@@ -344,10 +361,29 @@ mod tests {
     #[test]
     fn the_queue_comes_first() {
         let meeting = stopped();
-        let waiting = status(Path::new("/nonexistent/meeting"), &meeting, &|_| {
-            Some(Status::Waiting)
-        });
+        let waiting = status(
+            Path::new("/nonexistent/meeting"),
+            &meeting,
+            Some(Status::Waiting),
+        );
         assert_eq!(waiting, Status::Waiting);
+    }
+
+    #[test]
+    fn a_waiting_title_shows_before_it_is_saved() {
+        let folder = Path::new("/meetings/2026-11-08 22-48 Sync");
+        let mut meeting = stopped();
+        meeting.title = "Sync".into();
+        let waiting = |title: &str| Queued {
+            status: Some(Status::Processing),
+            title: Some(title.into()),
+        };
+        assert_eq!(item(folder, &meeting, waiting("Retro")).title, "Retro");
+        assert_eq!(
+            item(folder, &meeting, waiting("")).title,
+            "2026-11-08 22-48"
+        );
+        assert_eq!(item(folder, &meeting, Queued::default()).title, "Sync");
     }
 
     #[test]

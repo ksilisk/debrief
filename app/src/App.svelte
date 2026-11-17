@@ -11,17 +11,21 @@
     meetingEvents,
     moveToTrash,
     processingProgress,
+    renameMeeting,
+    showProblem,
     statusLabels,
     timeOfDay,
     type Finished,
     type MeetingItem,
     type Progress,
+    type Renamed,
   } from "./lib/meetings";
   import NewRecording from "./screens/NewRecording.svelte";
   import Recording from "./screens/Recording.svelte";
   import Meeting from "./screens/Meeting.svelte";
   import Settings from "./screens/Settings.svelte";
   import Permissions from "./screens/Permissions.svelte";
+  import TitleField from "./lib/components/TitleField.svelte";
   import { anyMissing, isMissing, loadPermissions, meetingsFolderAccess } from "./lib/permissions";
   import { installUpdate, updateEvent, updateStatus, type UpdateStatus } from "./lib/updates";
   import { loadSpeechModels, speechModelsEvent, type SpeechModels } from "./lib/models";
@@ -33,6 +37,10 @@
   let error = $state<string | null>(null);
   let meetings = $state<MeetingItem[]>([]);
   let selected = $state<string | null>(null);
+  /** Goes up when another meeting opens, so it starts on its summary. */
+  let opened = $state(0);
+  /** The sidebar item whose title is being edited. */
+  let renaming = $state<string | null>(null);
   let progress = $state<Progress | null>(null);
   /** Goes up whenever meetings change, so an open meeting loads again. */
   let version = $state(0);
@@ -69,6 +77,7 @@
   });
 
   function openMeeting(folder: string) {
+    if (folder !== selected) opened += 1;
     selected = folder;
     screen = "meeting";
   }
@@ -89,6 +98,16 @@
     version += 1;
   }
 
+  async function saveRename(item: MeetingItem, title: string) {
+    renaming = null;
+    if (title === item.ownTitle) return;
+    try {
+      await renameMeeting(item.folder, title);
+    } catch (e) {
+      void showProblem("Could not rename the meeting", String(e)).catch(() => {});
+    }
+  }
+
   async function meetingMenu(event: MouseEvent, item: MeetingItem) {
     event.preventDefault();
     const busy = item.status === "processing" || item.status === "waiting" || item.status === "summarizing";
@@ -96,6 +115,7 @@
       const menu = await Menu.new({
         items: [
           { text: "Show in Finder", action: () => void showInFinder(item.folder).catch(() => {}) },
+          { text: "Rename", action: () => (renaming = item.folder) },
           { item: "Separator" },
           { text: "Move to Trash", enabled: !busy, action: () => void moveToTrash(item.folder).catch(() => {}) },
         ],
@@ -154,6 +174,16 @@
         screen = "new";
       }),
       listen(meetingEvents.changed, () => void refresh()),
+      listen<Renamed>(meetingEvents.renamed, (event) => {
+        const { from, to } = event.payload;
+        if (selected === from) selected = to;
+        if (renaming === from) renaming = to;
+        const problems = saveProblems[from];
+        if (problems) {
+          delete saveProblems[from];
+          saveProblems[to] = problems;
+        }
+      }),
       listen<UpdateStatus>(updateEvent, (event) => (update = event.payload)),
       listen<SpeechModels>(speechModelsEvent, (event) => (models = event.payload)),
       listen<Progress>(meetingEvents.progress, (event) => {
@@ -189,6 +219,15 @@
     };
   });
 </script>
+
+{#snippet facts(item: MeetingItem)}
+  <span>
+    <span class="num">{timeOfDay(item.startedAt)} · {duration(item.durationSeconds)}</span>
+    <span class="chip {item.status}">
+      {item.status === "processing" && progress?.folder === item.folder ? `${progress.percent}%` : statusLabels[item.status]}
+    </span>
+  </span>
+{/snippet}
 
 <div class="window">
   <header class="titlebar" data-tauri-drag-region>
@@ -252,21 +291,29 @@
         <ul class="mlist">
           {#each group.items as item (item.folder)}
             <li>
-              <button
-                type="button"
-                class="mitem"
-                aria-current={shown === "meeting" && selected === item.folder}
-                onclick={() => openMeeting(item.folder)}
-                oncontextmenu={(event) => void meetingMenu(event, item)}
-              >
-                <b>{item.title}</b>
-                <span>
-                  <span class="num">{timeOfDay(item.startedAt)} · {duration(item.durationSeconds)}</span>
-                  <span class="chip {item.status}">
-                    {item.status === "processing" && progress?.folder === item.folder ? `${progress.percent}%` : statusLabels[item.status]}
-                  </span>
-                </span>
-              </button>
+              {#if renaming === item.folder}
+                <div class="mitem" aria-current={shown === "meeting" && selected === item.folder}>
+                  <TitleField
+                    value={item.ownTitle}
+                    size="item"
+                    placeholder="Leave empty for date and time"
+                    onSave={(title) => void saveRename(item, title)}
+                    onCancel={() => (renaming = null)}
+                  />
+                  {@render facts(item)}
+                </div>
+              {:else}
+                <button
+                  type="button"
+                  class="mitem"
+                  aria-current={shown === "meeting" && selected === item.folder}
+                  onclick={() => openMeeting(item.folder)}
+                  oncontextmenu={(event) => void meetingMenu(event, item)}
+                >
+                  <b>{item.title}</b>
+                  {@render facts(item)}
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -303,6 +350,7 @@
       {:else if shown === "meeting" && selected}
         <Meeting
           folder={selected}
+          {opened}
           progress={progress?.folder === selected ? progress : null}
           {version}
           problems={saveProblems[selected] ?? []}
