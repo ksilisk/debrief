@@ -16,6 +16,6 @@ pub fn meeting_ready(app: &AppHandle, meeting_title: &str, summary: bool) {
         })
         .show();
     if let Err(error) = shown {
-        eprintln!("Could not show a notification: {error}");
+        log::warn!("Could not show a notification: {error}");
     }
 }

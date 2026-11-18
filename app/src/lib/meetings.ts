@@ -62,6 +62,8 @@ export interface MeetingDetails extends MeetingItem {
   files: { name: string; bytes: number }[];
   /** RFC 3339; when the storage cleanup deleted the audio and video. */
   filesDeletedAt: string | null;
+  /** The sentence for a recording that stopped before it was stopped by hand. */
+  stoppedEarly: string | null;
 }
 
 export interface Progress {

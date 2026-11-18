@@ -79,6 +79,8 @@ pub struct Details {
     pub files: Vec<FileView>,
     /// RFC 3339; when the storage cleanup deleted the audio and video.
     pub files_deleted_at: Option<String>,
+    /// The sentence for a recording that stopped before it was stopped by hand.
+    pub stopped_early: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,7 +199,12 @@ pub fn details(folder: &Path, queued: &dyn Fn(&Path) -> Queued) -> Result<Detail
         marks: meeting.marks.iter().map(|mark| mark.at_seconds).collect(),
         files: files(folder),
         files_deleted_at: meeting.recording.files_deleted_at.map(|at| at.to_rfc3339()),
+        stopped_early: meeting.recording.error.as_deref().map(stopped_early),
     })
+}
+
+pub fn stopped_early(reason: &str) -> String {
+    format!("The recording stopped early: {reason}")
 }
 
 /// The title the app shows: the meeting's own, or the folder name.

@@ -113,6 +113,8 @@ export const useSummaryModel = (choice: ModelChoice) => invoke<void>("use_summar
 export const renameServer = (id: number, label: string) => invoke<void>("rename_server", { id, label });
 export const removeServer = (id: number) => invoke<void>("remove_server", { id });
 export const editSummaryPrompt = () => invoke<void>("edit_summary_prompt");
+/** Shows the log file in Finder. */
+export const showLog = () => invoke<void>("show_log");
 /** false when the user chose not to delete what the new setting applies to now. */
 export const setCleanup = (afterDays: number | null, del: Delete) =>
   invoke<boolean>("set_cleanup", { afterDays, delete: del });

@@ -150,6 +150,34 @@ pub async fn rename_meeting(app: AppHandle, folder: String, title: String) -> Re
     .await
 }
 
+#[tauri::command]
+pub async fn disk_space() -> Option<crate::disk::Space> {
+    tauri::async_runtime::spawn_blocking(crate::disk::for_new_recording)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Shows the log file in Finder, or its folder before anything was logged.
+#[tauri::command]
+pub async fn show_log() -> Result<(), String> {
+    blocking(|| {
+        let file = crate::logs::file().ok_or("Could not find the home folder")?;
+        let mut open = Command::new("open");
+        if file.is_file() {
+            open.arg("-R").arg(&file);
+        } else if let Some(folder) = file.parent() {
+            std::fs::create_dir_all(folder)
+                .map_err(|error| format!("Could not create {}: {error}", folder.display()))?;
+            open.arg(folder);
+        }
+        open.status()
+            .map_err(|error| format!("Could not open Finder: {error}"))?;
+        Ok(())
+    })
+    .await
+}
+
 /// For problems the window has no room to show in place.
 #[tauri::command]
 pub async fn show_problem(app: AppHandle, problem: String, detail: String) -> Result<(), String> {

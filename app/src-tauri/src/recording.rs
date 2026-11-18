@@ -19,10 +19,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::phase::{self, Phase};
-use crate::{hotkey, processing, tray};
+use crate::{disk, hotkey, processing, tray};
 
 /// How often the window gets the timer and the levels.
 const TICK: Duration = Duration::from_millis(100);
+/// Free space is checked every 5 seconds.
+const DISK_EVERY_TICKS: u64 = 50;
 
 const STARTED: &str = "recording-started";
 const STATUS: &str = "recording-status";
@@ -112,6 +114,8 @@ pub struct LiveStatus {
     pub them_level: f32,
     /// Audio and video files together.
     pub bytes: u64,
+    /// Checked every few seconds; `None` when it can't be.
+    pub disk: Option<disk::Space>,
 }
 
 impl From<&Status> for LiveStatus {
@@ -128,6 +132,7 @@ impl From<&Status> for LiveStatus {
                 .map(|stats| stats.bytes())
                 .sum::<u64>()
                 + status.video_bytes.unwrap_or(0),
+            disk: None,
         }
     }
 }
@@ -264,7 +269,7 @@ pub fn start_with_defaults(app: &AppHandle) {
     if let Err(message) = start(app, choices) {
         crate::window::show(app, Some(crate::window::Screen::New));
         if let Err(error) = app.emit(FAILED, message) {
-            eprintln!("Could not tell the window: {error}");
+            log::warn!("Could not tell the window: {error}");
         }
     }
 }
@@ -280,6 +285,9 @@ pub fn start(app: &AppHandle, choices: Choices) -> Result<(), String> {
         start_now(app, &state, choices)
     };
     state.busy.store(false, Ordering::SeqCst);
+    if let Err(problem) = &started {
+        log::warn!("Could not start recording: {problem}");
+    }
     started
 }
 
@@ -288,6 +296,14 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
         return Err(
             "Turn on the microphone or the system audio: there is nothing to transcribe.".into(),
         );
+    }
+    if let Some(space) = disk::for_new_recording()
+        && space.free_bytes < disk::STOP_BELOW
+    {
+        return Err(format!(
+            "The disk is almost full: only {} is free. Free up some space, then start the recording.",
+            disk::gigabytes(space.free_bytes)
+        ));
     }
     remember(&choices);
     let pressed_at = Local::now().fixed_offset();
@@ -351,6 +367,26 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
         _ => error.to_string(),
     })?;
 
+    log::info!(
+        "Recording started in {}: microphone {}, system audio {}, video {}, language {}",
+        folder.display(),
+        if choices.record_microphone {
+            "on"
+        } else {
+            "off"
+        },
+        match (choices.record_system_audio, &choices.app) {
+            (false, _) => "off",
+            (true, None) => "from all apps",
+            (true, Some(_)) => "from one app",
+        },
+        if choices.video {
+            format!("{} fps", choices.fps)
+        } else {
+            "off".into()
+        },
+        choices.language.code(),
+    );
     let sources = recorder.sources().clone();
     let title = match choices.title.trim() {
         "" => folder
@@ -393,15 +429,35 @@ fn start_now(app: &AppHandle, state: &Current, choices: Choices) -> Result<(), S
 /// and stops it when the capture fails.
 fn watch(app: &AppHandle, id: u64) {
     let mut shown = None;
-    loop {
+    let mut disk = None;
+    for tick in 0_u64.. {
         thread::sleep(TICK);
-        let (status, title) = match lock(&app.state::<Current>().active).as_ref() {
+        let (status, live, title) = match lock(&app.state::<Current>().active).as_ref() {
             Some(active) if active.id == id => {
-                (active.recorder.status(), active.live.title.clone())
+                let status = active.recorder.status();
+                let mut live = LiveStatus::from(&status);
+                if tick % DISK_EVERY_TICKS == 0 {
+                    disk = disk::while_recording(
+                        active.recorder.folder(),
+                        status.position,
+                        live.bytes,
+                    );
+                    if let Some(space) = disk
+                        && space.free_bytes < disk::STOP_BELOW
+                    {
+                        let free = disk::gigabytes(space.free_bytes);
+                        log::warn!("Stopping the recording: {free} free on the disk");
+                        active
+                            .recorder
+                            .fail(format!("the disk is almost full, with {free} free"));
+                    }
+                }
+                live.disk = disk;
+                (status, live, active.live.title.clone())
             }
             _ => return,
         };
-        emit(app, STATUS, LiveStatus::from(&status));
+        emit(app, STATUS, live);
         let menu_bar = (status.position as u64, status.paused);
         if shown != Some(menu_bar) {
             shown = Some(menu_bar);
@@ -423,11 +479,13 @@ fn watch(app: &AppHandle, id: u64) {
 
 pub fn toggle_pause(app: &AppHandle) -> Result<(), String> {
     match lock(&app.state::<Current>().active).as_mut() {
-        Some(active) => active
-            .recorder
-            .toggle_pause()
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
+        Some(active) => match active.recorder.toggle_pause() {
+            Ok(paused) => {
+                log::info!("Recording {}", if paused { "paused" } else { "resumed" });
+                Ok(())
+            }
+            Err(error) => Err(error.to_string()),
+        },
         None => Ok(()),
     }
 }
@@ -463,10 +521,7 @@ pub fn save_before_quit(app: &AppHandle) {
 pub fn save_at_exit(app: &AppHandle) {
     let active = lock(&app.state::<Current>().active).take();
     if let Some(active) = active {
-        let saved = save(active);
-        for problem in saved.problems {
-            eprintln!("{problem}");
-        }
+        save(active);
     }
 }
 
@@ -498,8 +553,13 @@ fn save(active: Active) -> Saved {
     let mut problems = Vec::new();
     match active.recorder.stop() {
         Ok(stopped) => {
+            log::info!(
+                "Recording stopped in {}: {:.0} s",
+                folder.display(),
+                stopped.meeting.recording.duration_seconds
+            );
             if let Some(error) = stopped.meeting.recording.error {
-                problems.push(format!("The recording stopped early: {error}"));
+                problems.push(crate::library::stopped_early(&error));
             }
             if let Some(error) = stopped.video_error {
                 problems.push(format!("{error}. The video parts are kept in the folder."));
@@ -509,6 +569,9 @@ fn save(active: Active) -> Saved {
             }
         }
         Err(error) => problems.push(format!("Could not finish saving: {error}")),
+    }
+    for problem in &problems {
+        log::warn!("{problem}");
     }
     Saved {
         title: active.live.title,
@@ -539,7 +602,7 @@ fn remember(choices: &Choices) {
         language: choices.language,
     };
     if let Err(error) = settings.save(&folder) {
-        eprintln!("Could not save the recording choices: {error}");
+        log::warn!("Could not save the recording choices: {error}");
     }
 }
 
@@ -561,7 +624,7 @@ fn explain(error: &CaptureError) -> String {
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Err(error) = app.emit(event, payload) {
-        eprintln!("Could not send {event} to the window: {error}");
+        log::warn!("Could not send {event} to the window: {error}");
     }
 }
 

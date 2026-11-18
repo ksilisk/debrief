@@ -24,6 +24,6 @@ pub enum Phase {
 
 pub fn set(app: &AppHandle, phase: Phase) {
     if let Err(error) = tray::update(app, &phase) {
-        eprintln!("Could not update the menu bar icon: {error}");
+        log::warn!("Could not update the menu bar icon: {error}");
     }
 }

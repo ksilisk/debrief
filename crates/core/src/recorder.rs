@@ -76,7 +76,7 @@ impl Sink {
         self.peaks[peak_index(track)].fetch_max(peak.to_bits(), Ordering::Relaxed);
         let written = self.with_session(|session| session.audio(track, time, sample_rate, samples));
         if let Some(Err(error)) = written {
-            self.fail(error.to_string());
+            self.fail(crate::error_text(&error));
         }
     }
 
@@ -205,6 +205,11 @@ impl<C: CaptureControl> Recorder<C> {
 
     pub fn sources(&self) -> &Sources {
         &self.sources
+    }
+
+    /// Asks for the recording to stop, for `reason`, as when the capture fails.
+    pub fn fail(&self, reason: String) {
+        self.sink.fail(reason);
     }
 
     /// Also resets the peaks, so call it from one place.

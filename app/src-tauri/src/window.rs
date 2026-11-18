@@ -38,7 +38,7 @@ pub fn open_meeting(app: &AppHandle, folder: &str) {
     if let Some(window) = app.get_webview_window(MAIN)
         && let Err(error) = window.emit(OPEN_MEETING, folder)
     {
-        eprintln!("Could not open the meeting: {error}");
+        log::warn!("Could not open the meeting: {error}");
     }
 }
 
@@ -52,11 +52,11 @@ pub fn show(app: &AppHandle, screen: Option<Screen>) {
         .and_then(|()| window.show())
         .and_then(|()| window.set_focus());
     if let Err(error) = shown {
-        eprintln!("Could not show the window: {error}");
+        log::warn!("Could not show the window: {error}");
     }
     if let Some(screen) = screen
         && let Err(error) = window.emit(NAVIGATE, screen)
     {
-        eprintln!("Could not open the {screen:?} screen: {error}");
+        log::warn!("Could not open the {screen:?} screen: {error}");
     }
 }

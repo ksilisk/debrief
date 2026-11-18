@@ -128,6 +128,7 @@ pub fn download(app: &AppHandle, name: &str) -> Result<(), String> {
     downloads.cancelled.store(false, Ordering::SeqCst);
     emit(app);
 
+    log::info!("Downloading the speech model {}", model.name);
     let app = app.clone();
     thread::spawn(move || {
         let downloads = app.state::<Downloads>();
@@ -147,16 +148,21 @@ pub fn download(app: &AppHandle, name: &str) -> Result<(), String> {
         *lock(&downloads.active) = None;
         match result {
             Ok(_) => {
+                log::info!("Downloaded the speech model {}", model.name);
                 if !chosen().is_downloaded().unwrap_or(false)
                     && let Err(error) = save_choice(model)
                 {
-                    eprintln!("Could not choose the downloaded model: {error}");
+                    log::warn!("Could not choose the downloaded model: {error}");
                 }
                 emit(&app);
                 processing::model_ready(&app);
             }
             Err(ModelError::Cancelled) => emit(&app),
             Err(error) => {
+                log::warn!(
+                    "Could not download the speech model {}: {error}",
+                    model.name
+                );
                 *lock(&downloads.error) = Some(capitalized(&error.to_string()));
                 emit(&app);
             }
@@ -210,7 +216,7 @@ fn save_choice(model: Model) -> Result<(), String> {
 
 fn emit(app: &AppHandle) {
     if let Err(error) = app.emit(STATUS, view(app)) {
-        eprintln!("Could not send the model status to the window: {error}");
+        log::warn!("Could not send the model status to the window: {error}");
     }
 }
 

@@ -14,6 +14,7 @@
     renameServer,
     saveSettings,
     setCleanup,
+    showLog,
     summaryModels,
     tokens,
     useSummaryModel,
@@ -55,6 +56,7 @@
   let permissionsMissing = $state<boolean | null>(null);
   let updateError = $state<string | null>(null);
   let storageError = $state<string | null>(null);
+  let logError = $state<string | null>(null);
 
   const updateText = $derived.by(() => {
     switch (update?.state) {
@@ -350,6 +352,15 @@
       await action();
     } catch (e) {
       modelError = String(e);
+    }
+  }
+
+  async function showLogFile() {
+    logError = null;
+    try {
+      await showLog();
+    } catch (e) {
+      logError = String(e);
     }
   }
 
@@ -741,6 +752,25 @@
     </section>
     {#if updateError}
       <p class="error" role="alert">{updateError}</p>
+    {/if}
+
+    <section class="group">
+      <h3>Bug reports</h3>
+      <div class="row">
+        <span class="k"
+          >Log file<InfoTip
+            label="Log file"
+            text="Debrief writes down what it does and what goes wrong: recordings starting and stopping, processing steps, errors. Never what was said, and meetings appear by date and time, not by title. Attach the file to a bug report."
+          /></span
+        >
+        <span class="v">
+          <span class="mono">~/Library/Logs/Debrief</span>
+          <button type="button" class="btn small" onclick={showLogFile}>Show in Finder</button>
+        </span>
+      </div>
+    </section>
+    {#if logError}
+      <p class="error" role="alert">{logError}</p>
     {/if}
   {/if}
 </div>

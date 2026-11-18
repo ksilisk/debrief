@@ -45,12 +45,12 @@ pub fn register_mark(app: &AppHandle) {
 
 pub fn unregister_mark(app: &AppHandle) {
     if let Err(error) = app.global_shortcut().unregister(mark()) {
-        eprintln!("Could not release Control+Command+M: {error}");
+        log::warn!("Could not release Control+Command+M: {error}");
     }
 }
 
 fn register(app: &AppHandle, shortcut: Shortcut, name: &str) {
     if let Err(error) = app.global_shortcut().register(shortcut) {
-        eprintln!("{name} is not available: {error}");
+        log::warn!("{name} is not available: {error}");
     }
 }

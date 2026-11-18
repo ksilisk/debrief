@@ -117,6 +117,12 @@ The app's own files live in `~/Library/Application Support/io.github.ksilisk.deb
 
 Before sending, the app checks that the prompt and transcript fit the model context, keeping room for the answer: the answer limit, but at most a quarter of the context, so a small local context isn't used up by the default 32k answer limit. A transcript that doesn't fit isn't sent; summarizing it in parts is not built. Changing the meetings folder doesn't move meetings saved before; the app refuses it while a recording or processing runs.
 
+## Logs and disk space
+
+The app logs to `~/Library/Logs/Debrief/debrief.log` (2 MB, one older file kept): the versions at launch, recordings starting and stopping, processing steps with their times, renames, downloads, updates and every error. It never logs transcript or summary text. Each line passes through one filter that cuts the title from meeting folders in paths (`…/2026-11-17 14-30 Sprint planning/…` becomes `…/2026-11-17 14-30/…`) and turns the home folder into `~`. Settings > Bug reports shows the file in Finder.
+
+A recording needs free space on the disk with the meetings folder. The New recording screen shows it and warns below 2 GB; the Recording screen shows it too, checked every 5 seconds, and warns when less than 15 minutes are left at the current rate. Below 0.5 GB a recording doesn't start, and one under way stops and saves, with the reason on the Meeting screen. A full disk reads as "the disk is full" rather than an OS error code.
+
 ## Building and signing
 
 macOS ties permissions (Microphone, Screen & System Audio Recording) to an app's designated requirement. An ad-hoc signed build's requirement is its own hash, so every rebuild looks like a new app and loses them. A build signed with a certificate gets `identifier "io.github.ksilisk.debrief" and certificate leaf = H"…"`, which every later build signed with the same certificate meets, so permissions stay (checked 2026-11-09 with two builds whose code hashes differed).

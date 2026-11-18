@@ -117,8 +117,10 @@ impl State {
 
     /// Runs with the lock held, so no job starts on the old folder meanwhile.
     fn rename_now(&mut self, folder: &Path, title: &str) -> Result<PathBuf, String> {
-        let renamed = debrief_core::rename::rename(folder, title)
-            .map_err(|error| capitalized(&error.to_string()))?;
+        let renamed = debrief_core::rename::rename(folder, title).map_err(|error| {
+            log::warn!("Could not rename {}: {error}", folder.display());
+            capitalized(&debrief_core::error_text(&error))
+        })?;
         for waiting in &mut self.need_model {
             if waiting == folder {
                 *waiting = renamed.clone();
@@ -192,6 +194,7 @@ pub fn rename(app: &AppHandle, folder: &Path, title: &str) -> Result<(), String>
         state
             .renames
             .insert(folder.clone(), title.trim().to_string());
+        log::info!("{}: the new title waits for processing", folder.display());
         None
     } else {
         Some(state.rename_now(&folder, title)?)
@@ -284,7 +287,14 @@ fn work(app: &AppHandle) {
                 }
             }
         };
+        let started = Instant::now();
         let mut finished = run(app, &job, &mut whisper, &queue.cancelled);
+        let seconds = started.elapsed().as_secs();
+        match (&finished.problem, finished.cancelled) {
+            (_, true) => log::info!("{}: stopped after {seconds} s", job.folder.display()),
+            (Some(problem), false) => log::warn!("{}: {problem}", job.folder.display()),
+            (None, false) => log::info!("{}: finished in {seconds} s", job.folder.display()),
+        }
         let renamed = {
             let mut state = lock(&queue.state);
             state.running = None;
@@ -361,12 +371,22 @@ fn run(
                 Err(Missing::Other(problem)) => return finished(Some(problem), false),
             };
             tracker.progress.transcribe_model = transcriber.model().to_string();
+            log::info!(
+                "{}: processing with {}",
+                folder.display(),
+                transcriber.model()
+            );
             process::process(folder, transcriber, cancelled, &mut |event| {
                 tracker.event(event)
             })
         }
         Kind::Summarize => match summarizer.as_mut() {
             Some(model) => {
+                log::info!(
+                    "{}: writing a summary with {}",
+                    folder.display(),
+                    model.model()
+                );
                 process::summarize_now(folder, model, cancelled, &mut |event| tracker.event(event))
             }
             None => Err(ProcessError::NoSummaryProvider),
@@ -381,11 +401,16 @@ fn run(
             });
             finished(Some(format!("No summary was written: {reason}.")), false)
         }
-        Err(error) => finished(Some(capitalized(&error.to_string())), false),
+        Err(error) => finished(Some(capitalized(&debrief_core::error_text(&error))), false),
     }
 }
 
 fn announce(app: &AppHandle, from: &Path, to: &Path) {
+    log::info!(
+        "{}: renamed, the folder is now {}",
+        from.display(),
+        to.display()
+    );
     emit(
         app,
         RENAMED,
@@ -409,7 +434,7 @@ fn renamed_after_queue(
             Some(to)
         }
         Err(problem) => {
-            eprintln!("Could not rename the meeting: {problem}");
+            log::warn!("Could not rename the meeting: {problem}");
             None
         }
     }
@@ -471,6 +496,7 @@ struct Tracker<'a> {
     app: &'a AppHandle,
     progress: Progress,
     started: Instant,
+    step_started: Instant,
     /// Where transcribing stood at the first progress event, for the time left.
     first_fraction: Option<f32>,
     last_sent: Instant,
@@ -519,6 +545,7 @@ impl<'a> Tracker<'a> {
                 summary_only,
             },
             started: Instant::now(),
+            step_started: Instant::now(),
             first_fraction: None,
             last_sent: Instant::now(),
             tracks: match &meeting {
@@ -539,10 +566,15 @@ impl<'a> Tracker<'a> {
         match event {
             Event::Started(step) => {
                 self.set_status(step, StepStatus::Running);
+                self.step_started = Instant::now();
                 urgent = true;
             }
             Event::Finished(step) => {
                 self.set_status(step, StepStatus::Done);
+                log::info!(
+                    "{step:?} done in {:.0} s",
+                    self.step_started.elapsed().as_secs_f32()
+                );
                 urgent = true;
             }
             Event::Transcribing { track, done } => {
@@ -646,7 +678,7 @@ fn canonical(folder: &Path) -> PathBuf {
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
     if let Err(error) = app.emit(event, payload) {
-        eprintln!("Could not send {event} to the window: {error}");
+        log::warn!("Could not send {event} to the window: {error}");
     }
 }
 

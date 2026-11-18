@@ -226,7 +226,7 @@ pub fn refresh_recent(app: &AppHandle) {
     }
     shown.recent = recent;
     if let Err(error) = render(app, &mut shown) {
-        eprintln!("Could not update the menu bar menu: {error}");
+        log::warn!("Could not update the menu bar menu: {error}");
     }
 }
 

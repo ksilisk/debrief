@@ -15,6 +15,8 @@ pub mod session;
 pub mod summary;
 pub mod transcript;
 
+pub use files::error_text;
+
 pub const APP_NAME: &str = "Debrief";
 
 /// Names the app's folder in `~/Library/Application Support`.

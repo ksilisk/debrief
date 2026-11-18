@@ -1,6 +1,16 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { clock, markMoment, size, stopRecording, togglePause, type Live, type LiveStatus } from "../lib/recording";
+  import { duration } from "../lib/meetings";
+  import {
+    clock,
+    gigabytes,
+    markMoment,
+    size,
+    stopRecording,
+    togglePause,
+    type Live,
+    type LiveStatus,
+  } from "../lib/recording";
 
   let { live, status, stopping }: { live: Live; status: LiveStatus | null; stopping: boolean } = $props();
 
@@ -21,6 +31,18 @@
   let marksSeen = 0;
 
   const paused = $derived(status?.paused ?? false);
+
+  const diskWarning = $derived.by(() => {
+    const disk = status?.disk;
+    if (!disk?.low) return null;
+    const left =
+      disk.minutesLeft === null
+        ? ""
+        : disk.minutesLeft < 1
+          ? ": less than a minute of recording left"
+          : `: about ${duration(disk.minutesLeft * 60)} of recording left`;
+    return `The disk is almost full${left}. Debrief stops the recording before the disk is full.`;
+  });
 
   // Paused audio is not saved, so the waveform stops and dims instead of moving on.
   $effect(() => {
@@ -133,8 +155,15 @@
     {/if}
     <span><b>Video</b>{live.video ?? "Off"}</span>
     <span><b>On disk</b><span class="num">{size(status?.bytes ?? 0)}</span></span>
+    {#if status?.disk}
+      <span><b>Free</b><span class="num">{gigabytes(status.disk.freeBytes)}</span></span>
+    {/if}
     <span><b>Marked moments</b><span class="num">{status?.marks ?? 0}</span></span>
   </div>
+
+  {#if diskWarning}
+    <p class="warn" role="status">{diskWarning}</p>
+  {/if}
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -274,7 +303,8 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .error {
+  .error,
+  .warn {
     margin: 18px 0 0;
     max-width: 760px;
     padding: 10px 12px;
@@ -282,6 +312,11 @@
     border: 1px solid color-mix(in srgb, var(--rec) 40%, var(--line));
     background: color-mix(in srgb, var(--rec) 7%, var(--surface));
     font-size: 13px;
+  }
+
+  .warn {
+    border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
   }
 
   .ctrls {

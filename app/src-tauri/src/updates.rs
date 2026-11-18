@@ -99,13 +99,17 @@ pub async fn check(app: &AppHandle) {
     let state = match checked {
         Ok(Some(update)) => {
             let version = update.version.clone();
+            log::info!("Update {version} is available");
             *lock(&app.state::<Updates>().found) = Some(update);
             State::Available { version }
         }
         Ok(None) => State::UpToDate,
-        Err(error) => State::Failed {
-            message: format!("Could not check for updates: {error}"),
-        },
+        Err(error) => {
+            log::warn!("Could not check for updates: {error}");
+            State::Failed {
+                message: format!("Could not check for updates: {error}"),
+            }
+        }
     };
     set(app, state);
 }
@@ -142,6 +146,7 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         .await;
     if let Err(error) = installed {
         let message = format!("Could not install the update: {error}");
+        log::warn!("{message}");
         set(
             app,
             State::Failed {
@@ -151,13 +156,14 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         return Err(message);
     }
     set(app, State::Installed);
+    log::info!("Update installed; restarting");
     relaunch::relaunch(app)
 }
 
 fn set(app: &AppHandle, state: State) {
     *lock(&app.state::<Updates>().state) = state;
     if let Err(error) = app.emit(STATUS, status(app)) {
-        eprintln!("Could not send the update status to the window: {error}");
+        log::warn!("Could not send the update status to the window: {error}");
     }
 }
 

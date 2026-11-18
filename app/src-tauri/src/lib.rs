@@ -2,8 +2,10 @@
 //! the commands the Svelte UI calls.
 
 mod commands;
+mod disk;
 mod hotkey;
 mod library;
+mod logs;
 mod notify;
 mod permissions;
 mod phase;
@@ -32,6 +34,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             window::show(app, None);
         }))
+        .plugin(logs::plugin())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -54,7 +57,7 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if let Err(error) = window.hide() {
-                    eprintln!("Could not hide the window: {error}");
+                    log::warn!("Could not hide the window: {error}");
                 }
             }
         })
@@ -76,6 +79,8 @@ pub fn run() {
             commands::delete_meeting,
             commands::rename_meeting,
             commands::show_problem,
+            commands::disk_space,
+            commands::show_log,
             commands::copy_text,
             commands::settings,
             commands::save_settings,
@@ -102,6 +107,8 @@ pub fn run() {
         ])
         .setup(|app| {
             let app = app.handle();
+            logs::catch_panics();
+            in_background(app, |_| logs::started());
             tray::create(app)?;
             phase::set(app, Phase::Idle);
             // Reading the meetings folder can wait on macOS's Documents permission prompt.
@@ -165,7 +172,7 @@ fn on_action(app: &AppHandle, action: Action) {
         Action::Start | Action::Stop => start_or_stop(app),
         Action::Pause => in_background(app, |app| {
             if let Err(error) = recording::toggle_pause(app) {
-                eprintln!("Could not pause or resume: {error}");
+                log::warn!("Could not pause or resume: {error}");
             }
         }),
         Action::Mark => mark(app),
@@ -194,7 +201,7 @@ fn start_or_stop(app: &AppHandle) {
 fn mark(app: &AppHandle) {
     in_background(app, |app| {
         if let Err(error) = recording::mark(app) {
-            eprintln!("Could not mark the moment: {error}");
+            log::warn!("Could not mark the moment: {error}");
         }
     });
 }

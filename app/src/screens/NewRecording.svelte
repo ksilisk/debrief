@@ -3,9 +3,12 @@
   import InfoTip from "../lib/components/InfoTip.svelte";
   import Toggle from "../lib/components/Toggle.svelte";
   import {
+    diskSpace,
+    gigabytes,
     recordingDefaults,
     recordingSources,
     startRecording,
+    type DiskSpace,
     type Language,
     type SourceList,
     type VideoSource,
@@ -42,6 +45,7 @@
   let loading = $state(false);
   let starting = $state(false);
   let permissions = $state<Permissions | null>(null);
+  let disk = $state<DiskSpace | null>(null);
 
   const permissionLine = $derived(
     permissions === null
@@ -76,15 +80,16 @@
 
   onMount(() => {
     void load();
-    void checkPermissions();
-    const onFocus = () => void checkPermissions();
+    void checkStatus();
+    const onFocus = () => void checkStatus();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   });
 
-  async function checkPermissions() {
+  async function checkStatus() {
     try {
       permissions = await loadPermissions();
+      disk = await diskSpace();
     } catch {
       // Opened in a plain browser (npm run dev) instead of the Tauri window.
     }
@@ -303,6 +308,15 @@
     </div>
   {/if}
 
+  {#if disk?.low}
+    <div class="perm-alert" role="alert">
+      <div class="alert-text">
+        <b><span class="alert-dot"></span>Only {gigabytes(disk.freeBytes)} is free on this disk</b>
+        <span>A long meeting with video can fill it. Debrief stops the recording before the disk is full.</span>
+      </div>
+    </div>
+  {/if}
+
   <div class="rec-row">
     <button type="button" class="rec-btn" aria-label="Start recording" onclick={start} disabled={starting}><span></span></button>
     <div>
@@ -311,11 +325,14 @@
     </div>
   </div>
 
-  {#if permissionLine.length > 0}
+  {#if permissionLine.length > 0 || disk}
     <p class="perm">
       {#each permissionLine as item (item.key)}
         <span><span class="dot {item.dot}"></span>{item.text}</span>
       {/each}
+      {#if disk}
+        <span><span class="dot {disk.low ? 'warn' : 'ok'}"></span>{gigabytes(disk.freeBytes)} free</span>
+      {/if}
     </p>
   {/if}
 </div>

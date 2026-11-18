@@ -273,7 +273,7 @@ fn hash_file(path: &Path, bytes: u64, hasher: &mut Sha256) -> Result<(), ModelEr
 
 /// What Finder calls available, which includes space macOS can free up itself.
 #[cfg(target_os = "macos")]
-fn free_space(folder: &Path) -> Option<u64> {
+pub fn free_space(folder: &Path) -> Option<u64> {
     use objc2_foundation::{
         NSArray, NSNumber, NSString, NSURL, NSURLVolumeAvailableCapacityForImportantUsageKey,
     };
@@ -288,7 +288,7 @@ fn free_space(folder: &Path) -> Option<u64> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn free_space(_folder: &Path) -> Option<u64> {
+pub fn free_space(_folder: &Path) -> Option<u64> {
     None
 }
 

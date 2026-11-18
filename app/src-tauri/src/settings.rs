@@ -217,7 +217,7 @@ pub fn choose_meetings_folder(app: &AppHandle) -> Result<Option<String>, String>
         settings.meetings_folder = (Some(&picked) != default.as_ref()).then(|| picked.clone());
     })?;
     if let Err(error) = app.emit(MEETINGS_CHANGED, ()) {
-        eprintln!("Could not refresh the meeting list: {error}");
+        log::warn!("Could not refresh the meeting list: {error}");
     }
     tray::refresh_recent(app);
     Ok(Some(with_tilde(&picked)))

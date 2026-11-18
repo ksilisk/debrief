@@ -61,6 +61,16 @@ export interface LiveStatus {
   meLevel: number;
   themLevel: number;
   bytes: number;
+  /** Checked every few seconds; null when it can't be. */
+  disk: DiskSpace | null;
+}
+
+/** Free space on the disk with the meetings folder. */
+export interface DiskSpace {
+  freeBytes: number;
+  /** Recording time left at the current rate; null until the rate is known. */
+  minutesLeft: number | null;
+  low: boolean;
 }
 
 export interface Saved {
@@ -86,12 +96,20 @@ export const togglePause = () => invoke<void>("toggle_pause");
 export const markMoment = () => invoke<void>("mark_moment");
 export const stopRecording = () => invoke<void>("stop_recording");
 export const showInFinder = (folder: string) => invoke<void>("show_in_finder", { folder });
+/** Where new meetings go; null when it can't be checked. */
+export const diskSpace = () => invoke<DiskSpace | null>("disk_space");
 
 /** `HH:MM:SS`, like the menu bar. */
 export function clock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(Math.floor(total / 3600))}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+}
+
+/** "1.4 GB" or "54 GB". */
+export function gigabytes(bytes: number): string {
+  const gb = bytes / 1e9;
+  return gb < 10 ? `${gb.toFixed(1)} GB` : `${Math.round(gb)} GB`;
 }
 
 export function size(bytes: number): string {

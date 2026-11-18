@@ -50,6 +50,10 @@
   const modelMissing = $derived(models !== null && chosenModel(models)?.downloaded === false);
 
   let details = $state<MeetingDetails | null>(null);
+  /** What went wrong while saving, and why the recording stopped early, which stays after a restart. */
+  const notes = $derived(
+    details?.stoppedEarly && !problems.includes(details.stoppedEarly) ? [details.stoppedEarly, ...problems] : problems,
+  );
   let loadError = $state<string | null>(null);
   let actionError = $state<string | null>(null);
   let tab = $state<"summary" | "transcript" | "files">("summary");
@@ -273,8 +277,8 @@
     </div>
   </div>
 
-  {#each problems as problem (problem)}
-    <p class="note warn">{problem}</p>
+  {#each notes as note (note)}
+    <p class="note warn">{note}</p>
   {/each}
   {#if actionError}
     <p class="error" role="alert">{actionError}</p>

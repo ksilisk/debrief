@@ -423,18 +423,24 @@ pub fn folder_name(started_at: &DateTime<FixedOffset>, title: &str) -> String {
 /// The folder's name with a new title after its date and time, or `None` when
 /// the name doesn't start with them, as after a rename in Finder.
 pub(crate) fn retitled_name(folder: &Path, title: &str) -> Option<String> {
-    const STAMP: &[u8] = b"0000-00-00 00-00";
-    let name = folder.file_name()?.to_str()?;
-    let stamp = name.get(..STAMP.len())?;
+    let stamp = stamp(folder.file_name()?.to_str()?)?;
+    Some(with_title(stamp, title))
+}
+
+/// The date and time a folder name starts with, such as `2026-11-04 14-30`,
+/// when a space or nothing follows them.
+pub fn stamp(name: &str) -> Option<&str> {
+    const SHAPE: &[u8] = b"0000-00-00 00-00";
+    let stamp = name.get(..SHAPE.len())?;
     let shaped = stamp
         .bytes()
-        .zip(STAMP.iter().copied())
+        .zip(SHAPE.iter().copied())
         .all(|(c, shape)| match shape {
             b'0' => c.is_ascii_digit(),
             _ => c == shape,
         });
     let rest = &name[stamp.len()..];
-    (shaped && (rest.is_empty() || rest.starts_with(' '))).then(|| with_title(stamp, title))
+    (shaped && (rest.is_empty() || rest.starts_with(' '))).then_some(stamp)
 }
 
 fn with_title(stamp: &str, title: &str) -> String {
@@ -587,6 +593,15 @@ mod tests {
         assert!(title.len() <= MAX_TITLE_BYTES);
         assert!(title.starts_with("планёрка планёрка"));
         assert!(!title.ends_with(' '));
+    }
+
+    #[test]
+    fn stamps_are_the_date_and_time_debrief_names_folders_with() {
+        assert_eq!(stamp("2026-11-04 14-30 Sync"), Some("2026-11-04 14-30"));
+        assert_eq!(stamp("2026-11-04 14-30"), Some("2026-11-04 14-30"));
+        assert_eq!(stamp("2026-11-04 14-30x"), None);
+        assert_eq!(stamp("Notes from Sync"), None);
+        assert_eq!(stamp("2026-11-04"), None);
     }
 
     #[test]

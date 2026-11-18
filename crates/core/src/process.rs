@@ -246,7 +246,7 @@ fn run_step(
             Err(ProcessError::Cancelled)
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = crate::error_text(&error);
             set_step(
                 meeting,
                 folder,

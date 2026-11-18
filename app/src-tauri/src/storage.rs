@@ -46,7 +46,7 @@ fn run(app: &AppHandle) {
     let settings = match config::folder().and_then(|folder| Settings::load(&folder)) {
         Ok(settings) => settings,
         Err(error) => {
-            eprintln!("Storage cleanup: {error}");
+            log::warn!("Storage cleanup: {error}");
             return;
         }
     };
@@ -55,7 +55,7 @@ fn run(app: &AppHandle) {
     };
     let due = cleanup::due(&library, rule, now(), &|folder| is_busy(app, folder));
     if let Some(problem) = apply(app, &due) {
-        eprintln!("Storage cleanup: {problem}");
+        log::warn!("Storage cleanup: {problem}");
     }
 }
 
@@ -141,8 +141,14 @@ fn apply(app: &AppHandle, due: &[Due]) -> Option<String> {
         if is_busy(app, &due.folder) {
             continue;
         }
-        if let Err(error) = cleanup::clean(due, now, &mut |path| trash::move_to_trash(path)) {
-            problem.get_or_insert(error.to_string());
+        match cleanup::clean(due, now, &mut |path| trash::move_to_trash(path)) {
+            Ok(()) => log::info!(
+                "{}: storage cleanup moved files to the Trash",
+                due.folder.display()
+            ),
+            Err(error) => {
+                problem.get_or_insert(error.to_string());
+            }
         }
     }
     changed(app);
@@ -225,7 +231,7 @@ fn is_busy(app: &AppHandle, folder: &Path) -> bool {
 
 fn changed(app: &AppHandle) {
     if let Err(error) = app.emit(MEETINGS_CHANGED, ()) {
-        eprintln!("Could not refresh the meeting list: {error}");
+        log::warn!("Could not refresh the meeting list: {error}");
     }
     tray::refresh_recent(app);
 }
