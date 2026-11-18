@@ -84,7 +84,7 @@ Each meeting gets its own folder, such as `2026-11-11 10-00 Weekly product sync`
 
 ## Good to know
 
-- **Early version.** Debrief is at v0.5 and works for everyday meetings, but expect rough edges. Bug reports are welcome in [Issues](https://github.com/ksilisk/debrief/issues); Settings > Bug reports shows a log file you can attach.
+- **Early version.** Debrief is at v0.6 and works for everyday meetings, but expect rough edges. Bug reports are welcome in [Issues](https://github.com/ksilisk/debrief/issues); Settings > Bug reports shows a log file you can attach.
 - **Languages.** Choose Russian, English or Auto for each meeting. With Auto, each side can speak its own language, but a track that switches languages midway is not handled well yet.
 - **Disk space.** Audio is saved as WAV, about 700 MB per hour for both tracks. Screen video adds about 0.6 to 1.3 GB per hour. Settings can move old recordings to the Trash after 30 days, 90 days or a year, and keep the transcripts and summaries.
 - **Platforms.** macOS only for now. Windows and Linux are planned.
